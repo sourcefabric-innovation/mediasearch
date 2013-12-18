@@ -1,0 +1,6 @@
+This software is open source, available under GPL v. 3, see
+http://opensource.org/licenses/GPL-3.0
+
+Citizen Desk is written and maintained by Sourcefabric and
+various contributors.
+
