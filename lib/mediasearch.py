@@ -1,15 +1,34 @@
 #!/usr/bin/env python
 #
+# Mediasearch
 # Performs media hashing, hash storage and (perceptual) similarity search
 #
 # db: self.media_search_db
-# collections:
-#   storages: {id, storage_id, db_name (some_name, e.g. client name), collection_name (some_name, e.g. public_photos),
-#              media_class (image, video, audio), hash_type (dhash, phash), norm_dim (8/16/32/64)}
-#   storage_N: {id, media_id (remote_archive_id), media_url, media_type (png/jpg/...), hash_string, tags:[list_of_tags]}
 #
-# http://localhost:9020/db_name/collection_name/_action?data=data
-#
+
+'''
+* Database
+
+storage data: collection "storages"
+{
+    _id: Integer <= internal:storage_rank:sequence,
+    provider: String(a-zA-Z0-9_-) <= provider_name,
+    archive: String(a-zA-Z0-9_-) <= archive_name,
+    created: Datetime, sets on creation,
+    updated: Datetime, sets on any change
+}
+
+media data: collections "storage_%N"
+{
+    _id: String(a-zA-Z0-9_-) <= reference:unique index,
+    class: String(image|video|audio) <= media_class, taken from mime,
+    hashes: [{method: String(dhash|phash|...), dim: Integer(8|16|32|64), repr: String(0x0-f)}],
+    alike: [{media: String<=_id, evals:[{method: String(dhash|phash|...), dim: Integer(8|16|32|64), diff: Number}]}],
+    tags: [String(a-zA-Z0-9_-)],
+    created: Datetime, sets on new hash save, i.e. on _insert,
+    updated: Datetime, sets on any change, i.e. on _insert, _update
+}
+'''
 
 import sys, os, logging
 import tempfile, urllib2
@@ -52,10 +71,12 @@ class MediaSearch(object):
         self.base_media_path = '/'
         self.tmp_dir = '/tmp'
 
-    def _db_get_hashes(self, media_storage, media_class, tags=None):
+    def _db_get_hashes(self, media_storage, media_class, tags_with=None, tags_without=None):
 
         hashes = []
 
+        #TODO: tags filtering should be delegated to MongoDB,
+        # if necessary, limit to single in/out tags, or one of any/all cases
         tags_in_any = None
         tags_in_all = None
         tags_out_any = None
@@ -254,7 +275,7 @@ class MediaSearch(object):
         return media_hash
 
     def _proc_compare_media_hash(self, media_storage, cmp_hash):
-        found_similar = {}
+        found_similar = []
 
         other_hashes = self._db_get_hashes(media_storage, cmp_hash['media_class'])
         for oth_hash in other_hashes:
@@ -275,11 +296,11 @@ class MediaSearch(object):
                     continue
                 cur_diffs.append({'method': cmp_hash_part['method'], 'dimension': cmp_hash_part['dimension'], 'difference': cur_compared['difference']})
             if cur_diffs:
-                found_similar[oth_hash_id] = cur_diffs
+                found_similar.append({'ref': oth_hash_id, 'eval': cur_diffs})
 
         return found_similar
 
-    def _rest_insert_media_hash(self, media_storage, store_fields):
+    def _action_insert_media_hash(self, media_storage, store_fields):
 
         check_items = {'url': store_fields['url'], 'mime': store_fields['mime']}
         for check_key in check_items:
@@ -317,6 +338,7 @@ class MediaSearch(object):
         # ... for info on a single image hash
         pass
 
+    '''
     def do_delete(self, db_name, collection_name, media_id):
         # DELETE
         # http://localhost:9020/db_name/collection_name/id_N
@@ -348,20 +370,60 @@ class MediaSearch(object):
 
         res = self._update_media_hash(media_id, media_info)
         return res
+    '''
 
-    def do_post(self, db_name, collection_name, media_info=None):
-        # POST
-        # http://localhost:9020/db_name/collection_name/
-        # data={
-        #   _id: if this is present, and not null, we update/delete media hash of that id
-        #   ref: reference, id string from client media archive, possibly concatenated with archive id, etc.
-        #   # archive: null or id of archive; ... put it into id, since it can be generally more fields
-        #   url: local or remote path, like file:///tmp/image.png or http://some.domain.tld/dir/image.jpg
-        #   mime: image/png, image/jpeg, image/pjpeg, image/gif, image/bmp, image/x-ms-bmp, image/tiff
-        #   tags: [list_of_tags]
-        # }
+    def do_post(self, mongo, entry, provider, archive, action, media, pass_mode):
+        # ref: reference, id string from client media archive, possibly concatenated with archive id, etc.
+        # url: local or remote path, like file:///tmp/image.png or http://some.domain.tld/dir/image.jpg
+        # mime: image/png, image/jpeg, image/pjpeg, image/gif, image/bmp, image/x-ms-bmp, image/tiff
+        # tags: [list_of_tags]
         #
 
+        if not mongo:
+            return False
+
+        if 'media' != entry:
+            return False
+
+        if (not provider) or (not archive):
+            return False
+
+        storage = self._db_get_storage(mongo, provider, archive)
+        if not storage:
+            return False
+
+        if not action in ['_insert', '_update', 'delete']:
+            return False
+
+        res = None
+
+        if action in ['_insert']:
+            media_use = {'tags': media['tags']}
+            for one_part in ['ref', 'url', 'mime']:
+                if not media[one_part]:
+                    return False
+                media_use[one_part] = media[one_part]
+            res = self._action_insert_media_hash(storage, media_use, pass_mode)
+
+        if action in ['_update']:
+            media_use = {'tags': media['tags']}
+            for one_part in ['ref']:
+                if not media[one_part]:
+                    return False
+                media_use[one_part] = media[one_part]
+            res = self._action_update_media_hash(storage, media_use, pass_mode)
+
+        if action in ['_delete']:
+            media_use = {}
+            for one_part in ['ref']:
+                if not media[one_part]:
+                    return False
+                media_use[one_part] = media[one_part]
+            res = self._action_delete_media_hash(storage, media_use, pass_mode)
+
+        return res
+
+        '''
         check_items = {'is_correct': self.is_correct, 'db_name': db_name, 'collection_name': collection_name, 'media_info': media_info}
         for check_key in check_items:
             if not check_items[check_key]:
@@ -369,7 +431,7 @@ class MediaSearch(object):
                 return False
 
         # either take info on the found, or create new
-        media_storage = self._get_storage(db_name, collection_name)
+        media_storage = self._db_get_storage(db_name, collection_name)
         if not media_storage:
             return False
 
@@ -397,13 +459,13 @@ class MediaSearch(object):
                 action = 'insert'
 
         if 'delete' == action:
-            res = self._delete_media_hash(media_storage, store_id)
+            res = self._action_delete_media_hash(media_storage, store_id)
         elif 'update' == action:
-            res = self._update_media_hash(media_storage, store_id, store_fields)
+            res = self._action_update_media_hash(media_storage, store_id, store_fields)
         elif 'insert' == action:
-            res = self._insert_media_hash(media_storage, store_fields)
+            res = self._action_insert_media_hash(media_storage, store_fields)
         else:
             return False
 
         return res
-
+        '''
