@@ -327,7 +327,7 @@ class HashStorage(object):
         if type(tags) is not list:
             tags = [tags]
 
-        tag_seq = []:
+        tag_seq = []
         for one_tag in tags:
             if one_tag and (one_tag not in tag_seq):
                 tag_seq.append(one_tag)

@@ -169,7 +169,10 @@ class MediaSearch(object):
         media_hash = self._alg_create_hashes(local_img_path, media_type_parts[0], media_type_parts[1])
 
         if remove_img:
-            os.unlink(local_img_path)
+            try:
+                os.unlink(local_img_path)
+            except:
+                pass
 
         return media_hash
 
@@ -292,7 +295,7 @@ class MediaSearch(object):
         # to only force the storage creation on _insert
         # end immediately if storage is not set
         to_force_storage = False
-        if action = 'insert':
+        if action == 'insert':
             to_force_storage = True
 
         storage.set_storage(provider, archive, to_force_storage)
