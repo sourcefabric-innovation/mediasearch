@@ -2,6 +2,12 @@
 #
 # Mediasearch
 #
+# config should contain:
+#   info (site, port) to connect to MongoDB
+#   MongoDB db name for mediasearch use
+#   tmp dirs for taking remote media files
+#   may be: base media dir for taking local files
+#
 
 '''
 * Requests
@@ -45,10 +51,9 @@ order ... ref(default)|created|updated; similarity as the first sort criterion i
 
 import datetime, json
 from flask import request, Blueprint
-import mediasearch_db
-import mediasearch
-
-mediasearch_plugin = Blueprint('mediasearch_plugin', __name__)
+from mediasearch.app.dbs import mongo_dbs, mediasearch_db_key
+from mediasearch.plugin.process import MediaSearch
+from mediasearch.plugin.storage import HashStorage
 
 DATA_PARAM = 'data'
 PASS_PARAM = 'pass'
@@ -59,6 +64,9 @@ GET_PARAM_LIST_DOUBLE = ['with', 'without']
 GET_PARAM_SPLIT = ','
 POST_PARAM_STRING = ['ref', 'url', 'mime']
 POST_PARAM_LIST = ['tags']
+TAGS_MODE_PARAM = 'mode'
+
+mediasearch_plugin = Blueprint('mediasearch_plugin', __name__)
 
 @mediasearch_plugin.route('/', defaults={'entry': None, 'provider': None, 'archive': None, 'action': None}, methods=['GET'])
 @mediasearch_plugin.route('/<entry>/', defaults={'provider': None, 'archive': None, 'action': None}, methods=['GET'])
@@ -70,7 +78,7 @@ def mediasearch_get(entry, provider, archive, action):
     Connector for GET requests
     '''
 
-    mongo_hnd = mediasearch_db.mongo_dbs[mediasearch_db.mediasearch]
+    media_storage = HashStorage(mongo_dbs[mediasearch_db_key])
 
     media_params = {}
 
@@ -105,8 +113,8 @@ def mediasearch_get(entry, provider, archive, action):
             if cur_val_set:
                 media_params[cur_par] = cur_val_set
 
-    msobj = mediasearch.MediaSearch()
-    rv = msobj.do_get(mongo_hnd, entry, provider, archive, action, media_params, pass_value)
+    search = mediasearch.MediaSearch()
+    rv = search.do_get(media_storage, entry, provider, archive, action, media_params)
 
     return rv
 
@@ -116,7 +124,7 @@ def mediasearch_post(entry, provider, archive, action):
     Connector for POST requests
     '''
 
-    mongo_hnd = mediasearch_db.mongo_dbs[mediasearch_db.mediasearch]
+    media_storage = HashStorage(mongo_dbs[mediasearch_db_key])
 
     pass_value = False
     if PASS_PARAM in request.args:
@@ -126,6 +134,12 @@ def mediasearch_post(entry, provider, archive, action):
                 if pass_value_got.startswith(test_start):
                     pass_value = True
                     break
+
+    tags_mode = None
+    if TAGS_MODE_PARAM in request.args:
+        tags_mode_got = str(request.args[TAGS_MODE_PARAM])
+        if tags_mode_got:
+            tags_mode = tags_mode_got
 
     try:
         media_data = request.get_json(True, False, False)
@@ -173,7 +187,7 @@ def mediasearch_post(entry, provider, archive, action):
                     if cur_list:
                         media_info[cur_par] = str(cur_val_set)
 
-    msobj = mediasearch.MediaSearch()
-    rv = msobj.do_post(mongo_hnd, entry, provider, archive, action, media_info, pass_value)
+    search = mediasearch.MediaSearch()
+    rv = search.do_post(media_storage, entry, provider, archive, action, media_info, tags_mode, pass_value)
 
     return rv
