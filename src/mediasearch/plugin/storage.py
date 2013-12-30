@@ -22,7 +22,7 @@ media data: collections "storage_%N"
     _id: String(a-zA-Z0-9_-) <= reference:unique index,
     class: String(image|video|audio) <= media_class, taken from mime,
     hashes: [{method: String(dhash|phash|...), dim: Integer(8|16|32|64), repr: String(0x0-f)}],
-    alike: [{ref: String<=_id, evals:[{method: String(dhash|phash|...), dim: Integer(8|16|32|64), diff: Number}]}],
+    alike: [{ref: String<=_id, evals:[{method: String(dhash|phash|...), dim: Integer(8|16|32|64), diff: Number, dist: Number}]}],
     tags: [String(a-zA-Z0-9_-)],
     created_on: Datetime, sets on new hash save, i.e. on _insert,
     updated_on: Datetime, sets on tags changes, i.e. on _update,
@@ -52,6 +52,32 @@ class HashStorage(object):
 
     def is_correct(self):
         return self.is_correct
+
+    def list_providers(self):
+        try:
+            collection = self.storage.db[COLLECTION_GENERAL]
+            providers = collection.distinct(PROVIDER_FIELD)
+        except:
+            self.is_correct = False
+            return None
+
+        if providers:
+            providers.sort()
+
+        return providers
+
+    def list_archives(self, provider):
+        try:
+            collection = self.storage.db[COLLECTION_GENERAL]
+            archives = collection.find({PROVIDER_FIELD: provider}).distinct(ARCHIVE_FIELD)
+        except:
+            self.is_correct = False
+            return None
+
+        if archives:
+            archives.sort()
+
+        return archives
 
     def storage_set(self):
         return self.collection_set
@@ -88,7 +114,7 @@ class HashStorage(object):
                         doc = cursor.next()
                         rank = str(int(doc['_id']) + 1)
                     timepoint = datetime.datetime.utcnow()
-                    collection.save({'_id': rank, PROVIDER_FIELD: provider, ARCHIVE_FIELD: archive, CREATED_FIELD: timepoint, UPDATED_FIELD: None})
+                    collection.save({'_id': rank, PROVIDER_FIELD: provider, ARCHIVE_FIELD: archive, CREATED_FIELD: timepoint, UPDATED_FIELD: timepoint})
                     self.collection_set = True
                 except:
                     self.is_correct = False
@@ -120,72 +146,324 @@ class HashStorage(object):
 
         return item
 
-    def get_hashes(self, media_class, tags_with=None, tags_without=None):
+    def _prepare_ref_ids(self, ref_ids=None):
 
-        hashes = []
+        if not ref_ids:
+            return None
 
-        #TODO: tags filtering should be delegated to MongoDB,
-        # if necessary, limit to single in/out tags, or one of any/all cases
-        tags_in_any = None
-        tags_in_all = None
-        tags_out_any = None
-        tags_out_all = None
-        if tags and ('in_any' in tags) and tags['in_any']:
-            tags_in_any = tags['in_any']
-        if tags and ('in_all' in tags) and tags['in_all']:
-            tags_in_all = tags['in_all']
-        if tags and ('out_any' in tags) and tags['out_any']:
-            tags_out_any = tags['out_any']
-        if tags and ('out_all' in tags) and tags['out_all']:
-            tags_out_all = tags['out_all']
+        ref_ids_use = []
+        if type(ref_ids) is not list:
+            ref_ids = [ref_ids]
+        for one_ref in ref_ids:
+            if not one_ref:
+                continue
+            ref_ids_use.append(str(one_ref))
 
-        db_collection = media_storage['collection']
+        if not ref_ids_use:
+            return None
 
-        cursor = db_collection.find({'media_class': media_class})
-        for entry in cursor:
-            cur_tags = []
-            if ('tags' in entry) and entry['tags']:
-                cur_tags = entry['tags']
+        search_part = None
+        if 1 == len(ref_ids_use):
+            search_part = {'_id': ref_ids_use[0]}
+        else:
+            search_part = {'_id': {'$in': ref_ids_use}}
 
-            if tags_in_any:
-                got_in_any = False
-                for test_tag in tags_in_any:
-                    if test_tag in cur_tags:
-                        got_in_any = True
-                        break
-                if not got_in_any:
+        return search_part
+
+    def _prepare_tags_with(self, tags_with):
+
+        tags_with_use = []
+
+        if not tags_with:
+            tags_with = []
+        if type(tags_with) is not list:
+            tags_with = [tags_with]
+
+        for one_tag_got in tags_with:
+            if not one_tag_got:
+                continue
+            one_tag_set = []
+            if type(one_tag_got) is not list:
+                one_tag_got = [one_tag_got]
+            for one_tag_sub in one_tag_got:
+                if not one_tag_sub:
                     continue
+                one_tag_set.append({'tags': one_tag_sub})
+            if not one_tag_set:
+                continue
+            if 1 == len(one_tag_set):
+                tags_with_use.append(one_tag_set[0])
+            else:
+                tags_with_use.append({'$or': one_tag_set})
 
-            if tags_in_all:
-                got_in_all = True
-                for test_tag in tags_in_all:
-                    if not test_tag in cur_tags:
-                        got_in_all = False
-                        break
-                if not got_in_all:
+        rv = None
+        if 1 == len(tags_with_use):
+            rv = tags_with_use[0]
+        if 1 < len(tags_with_use):
+            rv = {'$and': tags_with_use}
+
+        return rv
+
+    def _prepare_tags_without(self, tags_without):
+
+        tags_without_use = []
+
+        if not tags_without:
+            tags_without = []
+        if type(tags_without) is not list:
+            tags_without = [tags_without]
+
+        for one_tag_got in tags_without:
+            if not one_tag_got:
+                continue
+            one_tag_set = []
+            if type(one_tag_got) is not list:
+                one_tag_got = [one_tag_got]
+            for one_tag_sub in one_tag_got:
+                if not one_tag_sub:
                     continue
+                one_tag_set.append({'tags': {'$not': one_tag_sub}})
+            if not one_tag_set:
+                continue
+            if 1 == len(one_tag_set):
+                tags_without_use.append(one_tag_set)
+            else:
+                tags_without_use.append({'$or': one_tag_set})
 
-            if tags_out_any:
-                got_out_any = False
-                for test_tag in tags_out_any:
-                    if test_tag in cur_tags:
-                        got_out_any = True
-                        break
-                if got_out_any:
+        rv = None
+        if 1 == len(tags_without_use):
+            rv = tags_without_use[0]
+        if 1 < len(tags_without_use):
+            rv = {'$and': tags_without_use}
+
+        return rv
+
+    def _prepare_order(self, order):
+
+        order_list = []
+
+        if order is not None:
+            if type(order) is not list:
+                order = [order]
+                for one_sort in order:
+                    one_sort = str(one_sort).lower()
+                    if one_sort.startswith('ref'):
+                        order_list.append(('_id', 1))
+                    if one_sort.startswith('cre'):
+                        order_list.append((CREATED_FIELD, -1))
+                    if one_sort.startswith('upd'):
+                        order_list.append((UPDATED_FIELD, -1))
+                    if one_sort.startswith('rel'):
+                        order_list.append((RELIKED_FIELD, -1))
+
+        if not order_list:
+            order_list = [('_id', 1)]
+
+        return order_list
+
+    def get_alike_media(self, ref_ids, media_class=None, tags_with=None, tags_without=None, order=None, offset=None, limit=None):
+        if not self.is_correct:
+            return []
+
+        if not self.collection_set:
+            return []
+
+        search_struct = self._prepare_ref_ids(ref_ids)
+        if not search_struct:
+            return []
+
+        test_refs = []
+        test_evals = {}
+        try:
+            cursor = db_collection.find(search_struct)
+            for entry in cursor:
+                if ('alike' not in entry) or (not entry['alike']):
+                    pass
+                cur_alikes = entry['alike']
+                if type(cur_alikes) is not list:
+                    cur_alikes = [cur_alikes]
+                for one_alike in cur_alikes:
+                    if ('ref' not in one_alike) or (not one_alike['ref']):
+                        continue
+                    cur_ref = one_alike['ref']
+                    if cur_ref not in test_refs:
+                        test_refs.append(cur_ref)
+                    if cur_ref not in test_evals:
+                        test_evals[cur_ref] = []
+                    cur_evals = []
+                    if ('evals' in one_alike) and (one_alike['evals']):
+                        cur_evals = one_alike['evals']
+                    if type(cur_evals) is not list:
+                        cur_evals = [cur_evals]
+                    for one_eval in cur_evals:
+                        if not one_eval:
+                            continue
+                        test_evals[cur_ref].append(one_eval)
+        except:
+            self.is_correct = False
+            return []
+
+        if not test_refs:
+            return []
+
+        search_parts = []
+        if 1 == len(test_refs):
+            search_parts.append({'_id': test_refs[0]})
+        else:
+            search_parts.append({'_id': {'$in': test_refs}})
+
+        if media_class:
+            search_parts.append({'class': media_class})
+
+        take_with = self._prepare_tags_with(tags_with)
+        if take_with:
+            search_parts.append(take_with)
+
+        take_without = self._prepare_tags_without(tags_without)
+        if take_without:
+            search_parts.append(take_without)
+
+        search_struct = {}
+        if 1 == len(search_parts):
+            search_struct = search_parts[0]
+        else:
+            search_struct = {'$and': search_parts}
+
+        order_list = self._prepare_order(order)
+
+        take_refs = []
+        take_alikes = {}
+        try:
+            cursor = db_collection.find(search_struct).sort(order_list)
+            for entry in cursor:
+                take_refs.append(entry['_id'])
+                cur_take = {}
+                cur_take['class'] = entry['class']
+                cur_tags = []
+                if ('tags' in entry) and entry['tags']:
+                    cur_tags = entry['tags']
+                    if type(cur_tags) is not list:
+                        cur_tags = [cur_tags]
+                cur_take['tags'] = cur_tags
+                for one_field in [CREATED_FIELD, UPDATED_FIELD, RELIKED_FIELD]:
+                    cur_take[one_field] = entry[one_field]
+                take_alikes[entry['_id']] = cur_take
+        except:
+            self.is_correct = False
+            return []
+
+        if not take_refs:
+            return []
+
+        sort_values = {}
+        eval_values = {}
+
+        for one_ref in take_refs:
+            cur_cmp = float('inf')
+            if one_ref not in sort_values:
+                sort_values[one_ref] = cur_cmp
+            if one_ref not in eval_values:
+                eval_values[one_ref] = []
+
+            if one_ref not in test_evals:
+                continue
+            cur_cmp = sort_values[one_ref]
+
+            for one_eval in test_evals[one_ref]:
+                eval_values[one_ref].append(one_eval)
+
+                if 'dist' not in one_eval:
                     continue
-
-            if tags_out_all:
-                got_out_all = True
-                for test_tag in tags_out_all:
-                    if not test_tag in cur_tags:
-                        got_out_all = False
-                        break
-                if got_out_all:
+                try:
+                    one_cmp = float(one_eval['dist'])
+                except:
                     continue
+                if one_cmp < cur_cmp:
+                    cur_cmp = one_cmp
+            sort_values[one_ref] = cur_cmp
 
-            hashes.append(entry)
+        del(test_evals)
 
-        return hashes
+        take_refs.sort(key=lambda ref: sort_values[ref])
+
+        if offset is not None:
+            take_refs = take_refs[offset:]
+        if limit is not None:
+            take_refs = take_refs[:limit]
+
+        output = []
+
+        for cur_ref in take_refs:
+            cur_item = {'ref': cur_ref}
+            cur_item['evals'] = eval_values[cur_ref]
+            for one_part in take_alikes[cur_ref]:
+                cur_item[one_part] = cur_entry[one_part]
+            output.append(cur_item)
+
+        return output
+
+    def get_class_media(self, ref_ids=None, media_class=None, tags_with=None, tags_without=None, order=None, offset=None, limit=None):
+        if not self.is_correct:
+            return []
+
+        if not self.collection_set:
+            return []
+
+        search_parts = []
+
+        ref_part = self._prepare_ref_ids(ref_ids)
+        if ref_part:
+            search_parts.append(ref_part)
+
+        if media_class:
+            search_parts.append({'class': media_class})
+
+        if not search_parts:
+            return []
+
+        take_with = self._prepare_tags_with(tags_with)
+        if take_with:
+            search_parts.append(take_with)
+
+        take_without = self._prepare_tags_without(tags_without)
+        if take_without:
+            search_parts.append(take_without)
+
+        search_struct = {}
+        if 1 == len(search_parts):
+            search_struct = search_parts[0]
+        else:
+            search_struct = {'$and': search_parts}
+
+        order_list = self._prepare_order(order)
+
+        output = []
+
+        try:
+            cursor = db_collection.find(search_struct).sort(order_list)
+            if offset is not None:
+                cursor = cursor.skip(offset)
+            if limit is not None:
+                cursor = cursor.limit(limit)
+
+            for entry in cursor:
+                cur_item = {'ref': entry['_id'], 'class': entry['class']}
+                cur_tags = []
+                if ('tags' in entry) and entry['tags']:
+                    cur_tags = entry['tags']
+                    if type(cur_tags) is not list:
+                        cur_tags = [cur_tags]
+                cur_item['tags'] = cur_tags
+                for one_field in [CREATED_FIELD, UPDATED_FIELD, RELIKED_FIELD]:
+                    cur_item[one_field] = entry[one_field]
+
+                output.append(cur_item)
+
+        except:
+            self.is_correct = False
+            return []
+
+        return output
 
     def load_class_hashes(self, media_class):
         if not self.is_correct:
@@ -274,8 +552,8 @@ class HashStorage(object):
         timepoint = datetime.datetime.utcnow()
 
         save_data[CREATED_FIELD] = timepoint
-        save_data[UPDATED_FIELD] = None
-        save_data[RELIKED_FIELD] = None
+        save_data[UPDATED_FIELD] = timepoint
+        save_data[RELIKED_FIELD] = timepoint
 
         try:
             collection = self.storage.db[self.collection_name]
@@ -345,8 +623,7 @@ class HashStorage(object):
                 except:
                     return False
 
-
-        if set_mode == 'del':
+        if set_mode == 'pop':
             if tag_seq:
                 try:
                     collection.update({'_id': id_value}, {'$pullAll': {'tags': tags}}, upsert=False)

@@ -12,6 +12,7 @@ import imagehash
 
 BLOCK_SIZE_GET_REMOTE = 8192
 ALLOWED_SPEC = re.compile('^[\d\w_-]+$')
+MEDIA_ENTRY_NAME = 'media'
 
 class MediaSearch(object):
     known_media_types = {'image' : ['png', 'jpg', 'jpeg', 'pjpeg', 'gif', 'bmp', 'x-ms-bmp', 'tiff']}
@@ -22,6 +23,7 @@ class MediaSearch(object):
         'image_phash': {
             'media': ['image'],
             'method': lambda x, y, z: imagehash.phash(Image.open(y), z),
+            'dist': lambda x, y: (float(x) / (y * y)),
             'dims': [16],
             'repr': imagehash.binary_array_to_hex,
             'obj': imagehash.hex_to_hash
@@ -29,6 +31,7 @@ class MediaSearch(object):
         'image_dhash': {
             'media': ['image'],
             'method': lambda x, y, z: imagehash.dhash(Image.open(y), z),
+            'dist': lambda x, y: (float(x) / (y * y)),
             'dims': [16],
             'repr': imagehash.binary_array_to_hex,
             'obj': imagehash.hex_to_hash
@@ -99,6 +102,7 @@ class MediaSearch(object):
             if isinstance(cmp2, str):
                 cmp2 = method_info['obj'](cmp2)
             diff = operator.sub(cmp1, cmp2)
+            dist = method_info['dist'](diff, dimension)
         except:
             logging.warning('can not compare media hashes: ' + str(method_name))
             return None
@@ -114,7 +118,7 @@ class MediaSearch(object):
                     break
                 test_dim -= 1
 
-        return {'diff': diff, 'similar': (diff <= test_dim)}
+        return {'diff': diff, 'dist': dist, 'similar': (diff <= test_dim)}
 
     def _proc_remove_media(self, media_storage, media_data, pass_mode):
 
@@ -202,11 +206,70 @@ class MediaSearch(object):
                     cur_compared = self._alg_compare_hashes(cmp_hash_part['method'], cmp_hash_part['dim'], cmp_hash_part['obj'], oth_hash_part['repr'])
                     if (not cur_compared) or (not cur_compared['similar']):
                         continue
-                    cur_diffs.append({'method': cmp_hash_part['method'], 'dim': cmp_hash_part['dim'], 'diff': cur_compared['diff']})
+                    cur_diffs.append({'method': cmp_hash_part['method'], 'dim': cmp_hash_part['dim'], 'diff': cur_compared['diff'], 'dist': cur_compared['dist']})
             if cur_diffs:
                 found_similar.append({'ref': oth_hash_id, 'evals': cur_diffs})
 
         return found_similar
+
+    def _action_list_entries(self, storage):
+        links = [{'path': '/' + str(MEDIA_ENTRY_NAME)}]
+
+        return links
+
+    def _action_list_providers(self, storage, entry):
+        entries = storage.list_providers()
+
+        links = []
+
+        if not providers:
+            return links
+
+        for one_provider in providers:
+            if not one_provider:
+                continue
+            links.append({'path': '/' + str(MEDIA_ENTRY_NAME) + '/' + str(one_provider)})
+
+        return links
+
+    def _action_list_archives(self, storage, entry, provider):
+        archives = storage.list_archives(provider)
+
+        links = []
+
+        if not archives:
+            return links
+
+        for one_archive in archives:
+            if not one_archive:
+                continue
+            links.append({'path': '/' + str(MEDIA_ENTRY_NAME) + '/' + str(entry) + '/' + str(one_archive)})
+
+        return links
+
+    def _action_list_actions(self, storage, entry, provider, archive):
+        base_path = '/' + str(MEDIA_ENTRY_NAME) + '/' + str(entry) + '/' + str(archive) + '/'
+
+        links = []
+
+        action_list = {
+            'GET': ['_select', '_search'],
+            'POST': ['_insert', '_update', '_delete'],
+        }
+
+        for method in action_list:
+            for action in action_list[method]:
+                links.append({'path': base_path + str(action), 'method': str(method)})
+
+        return links
+
+    def _action_select_media(self, storage, params):
+        res = storage.get_class_media(params['ref'], params['class'], params['with'], params['without'], params['order'], params['offset'], params['limit'])
+        return res
+
+    def _action_search_media(self, storage, params_use):
+        res = storage.get_alike_media(params['ref'], params['class'], params['with'], params['without'], params['order'], params['offset'], params['limit'])
+        return res
 
     def _action_insert_media_hash(self, media_storage, media_fields, pass_mode):
 
@@ -268,12 +331,72 @@ class MediaSearch(object):
 
         if not storage:
             return False
-        if 'media' != entry:
-            return False
-        if (not provider) or (not archive):
-            return False
 
-        return []
+        res = None
+
+        if action is None:
+            # do basic lists
+
+            if entry is None:
+                res = self._action_list_entries(storage)
+            else:
+                if MEDIA_ENTRY_NAME != entry:
+                    return False
+
+                if provider is None:
+                    res = self._action_list_providers(storage, entry)
+                else:
+                    if archive is None:
+                        res = self._action_list_archives(storage, entry, provider)
+                    else:
+                        res = self._action_list_actions(storage, entry, provider, archive)
+
+        else:
+
+            if MEDIA_ENTRY_NAME != entry:
+                return False
+            if (not provider) or (not archive):
+                return False
+            if action not in ['_select', '_search']:
+                return False
+
+            storage.set_storage(provider, archive, False)
+            if not storage.is_correct():
+                return False
+
+            search_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
+
+            if action in ['_select']:
+                if (not media['ref']) and (not media['class']):
+                    logging.warning('select media: neither ref nor class provided')
+                    return False
+
+                if not storage.storage_set():
+                    return []
+
+                params_use = {}
+                select_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
+                for one_key in select_keys:
+                    params_use[one_key] = params[one_key]
+
+                res = self._action_select_media(storage, params_use)
+
+            if action in ['_search']:
+                if not media['ref']:
+                    logging.warning('search media: ref not provided')
+                    return False
+
+                if not storage.storage_set():
+                    return []
+
+                params_use = {}
+                search_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
+                for one_key in search_keys:
+                    params_use[one_key] = params[one_key]
+
+                res = self._action_search_media(storage, params_use)
+
+        return res
 
     def do_post(self, storage, entry, provider, archive, action, media, tags_mode, pass_mode):
         # ref: reference, id string from client media archive, possibly concatenated with archive id, etc.
@@ -284,7 +407,7 @@ class MediaSearch(object):
 
         if not storage:
             return False
-        if 'media' != entry:
+        if MEDIA_ENTRY_NAME != entry:
             return False
         if (not provider) or (not archive):
             return False
@@ -303,7 +426,7 @@ class MediaSearch(object):
             return False
 
         if not storage.storage_set():
-            return False
+            return bool(pass_mode)
 
         res = None
 
@@ -330,7 +453,7 @@ class MediaSearch(object):
 
             if not tags_mode:
                 tags_mode = 'set'
-            if not tags_mode in ['set', 'add', 'del']:
+            if not tags_mode in ['set', 'add', 'pop']:
                 return False
 
             res = self._action_update_media_hash(storage, media_use, tags_mode, pass_mode)

@@ -23,7 +23,7 @@ http://localhost:9020/media/provider_name/archive_name/
 returns list of actions
 
 POST:
-http://localhost:9020/media/provider_name/archive_name/_action?pass=boolean
+http://localhost:9020/media/provider_name/archive_name/_action?pass=boolean&mode=tag_setting
 _action: _insert, _update, _delete
 data: {ref,url,mime,tags} for _insert, {ref,tags} for _update, {ref} for _delete
 {
@@ -39,14 +39,17 @@ _delete: whether to ignore non-existent ref, otherwise error returned
 
 GET:
 http://localhost:9020/media/provider_name/archive_name/_action?par1=val1&...
-_action: _search
+_action: _select, _search
 parN:
-ref ... if any ref specified, listing is on similar items only; several values used as similar to any of them
+ref ... case for _search, mandatory for _search: listing similar items; several values used as similar to any of them
+ref ... case for _select (ref or class mandatory for _select)
+class ... case for _search: image / video / audio
+class ... case for _select(ref or class mandatory for _select): image / video / audio
 with ... tags included, several parN means all necessary, use ","-joined values for inclusion if any tag present
 without ... tags excluded, several parN means all excluded, use ","-joined vlaues for exclusion if all tags present
-limit ... (maximal) count of items returned
+order ... ref(default)|created|updated|reliked; similarity is the first sort criterion for _search
 offset ... offset for listing
-order ... ref(default)|created|updated; similarity as the first sort criterion if any ref specified
+limit ... (maximal) count of items returned
 '''
 
 import datetime, json
@@ -58,7 +61,7 @@ from mediasearch.plugin.storage import HashStorage
 DATA_PARAM = 'data'
 PASS_PARAM = 'pass'
 PASS_PARAM_TRUE = ['1', 't', 'T']
-GET_PARAM_SIMPLE = ['limit', 'offset']
+GET_PARAM_SIMPLE = ['class', 'limit', 'offset']
 GET_PARAM_LIST = ['ref', 'order']
 GET_PARAM_LIST_DOUBLE = ['with', 'without']
 GET_PARAM_SPLIT = ','
