@@ -52,8 +52,12 @@ offset ... offset for listing
 limit ... (maximal) count of items returned
 '''
 
-import datetime, json
-from flask import request, Blueprint
+import os, sys, datetime, json, logging
+try:
+    from flask import request, Blueprint
+except:
+    logging.error('Flask framework is not installed')
+    os._exit(1)
 from mediasearch.app.dbs import mongo_dbs, mediasearch_db_key
 from mediasearch.plugin.process import MediaSearch
 from mediasearch.plugin.storage import HashStorage
@@ -116,10 +120,13 @@ def mediasearch_get(entry, provider, archive, action):
             if cur_val_set:
                 media_params[cur_par] = cur_val_set
 
-    search = mediasearch.MediaSearch()
-    rv = search.do_get(media_storage, entry, provider, archive, action, media_params)
-
-    return rv
+    try:
+        search = mediasearch.MediaSearch()
+        rv = search.do_get(media_storage, entry, provider, archive, action, media_params)
+        return rv
+    except:
+        logging.error('GET request: uncaught exception')
+        return (json.dumps({'_message': 'internal server error'}), 500, {'Content-Type': 'application/json'})
 
 @mediasearch_plugin.route('/<entry>/<provider>/<archive>/<action>', defaults={}, methods=['POST'])
 def mediasearch_post(entry, provider, archive, action):
@@ -190,7 +197,10 @@ def mediasearch_post(entry, provider, archive, action):
                     if cur_list:
                         media_info[cur_par] = str(cur_val_set)
 
-    search = mediasearch.MediaSearch()
-    rv = search.do_post(media_storage, entry, provider, archive, action, media_info, tags_mode, pass_value)
-
-    return rv
+    try:
+        search = mediasearch.MediaSearch()
+        rv = search.do_post(media_storage, entry, provider, archive, action, media_info, tags_mode, pass_value)
+        return rv
+    except:
+        logging.error('POST request: uncaught exception')
+        return (json.dumps({'_message': 'internal server error'}), 500, {'Content-Type': 'application/json'})

@@ -327,10 +327,18 @@ class MediaSearch(object):
 
         return rv
 
+    def _answer_on_wrong(self, status=404, message=''):
+        return (json.dumps({'_message': message}), status, {'Content-Type': 'application/json'})
+
+    def _answer_on_items(self, status=200, items=None):
+        if not items:
+            items = []
+        return (json.dumps({'_items': items}), status, {'Content-Type': 'application/json'})
+
     def do_get(self, storage, entry, provider, archive, action, params):
 
         if not storage:
-            return False
+            return self._answer_on_wrong(500)
 
         res = None
 
@@ -341,7 +349,8 @@ class MediaSearch(object):
                 res = self._action_list_entries(storage)
             else:
                 if MEDIA_ENTRY_NAME != entry:
-                    return False
+                    logging.warning('GET request: unknown entry')
+                    return self._answer_on_wrong(404, 'unknown entry')
 
                 if provider is None:
                     res = self._action_list_providers(storage, entry)
@@ -354,25 +363,28 @@ class MediaSearch(object):
         else:
 
             if MEDIA_ENTRY_NAME != entry:
-                return False
+                logging.warning('GET request: unknown entry')
+                return self._answer_on_wrong(404, 'unknown entry')
             if (not provider) or (not archive):
-                return False
+                logging.warning('GET request: provider and archive have to be specified')
+                return self._answer_on_wrong(404, 'provider and archive have to be specified')
             if action not in ['_select', '_search']:
-                return False
+                logging.warning('GET request: unknown action')
+                return self._answer_on_wrong(404, 'unknown action')
 
             storage.set_storage(provider, archive, False)
             if not storage.is_correct():
-                return False
+                return self._answer_on_wrong(500)
 
             search_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
 
             if action in ['_select']:
                 if (not media['ref']) and (not media['class']):
                     logging.warning('select media: neither ref nor class provided')
-                    return False
+                    return self._answer_on_wrong(404, 'select media: neither ref nor class provided')
 
                 if not storage.storage_set():
-                    return []
+                    return self._answer_on_items(200, [])
 
                 params_use = {}
                 select_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
@@ -384,10 +396,10 @@ class MediaSearch(object):
             if action in ['_search']:
                 if not media['ref']:
                     logging.warning('search media: ref not provided')
-                    return False
+                    return self._answer_on_wrong(404, 'search media: ref not provided')
 
                 if not storage.storage_set():
-                    return []
+                    return self._answer_on_items(200, [])
 
                 params_use = {}
                 search_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
@@ -396,7 +408,10 @@ class MediaSearch(object):
 
                 res = self._action_search_media(storage, params_use)
 
-        return res
+        if res is None:
+            return self._answer_on_wrong(404)
+        else:
+            return self._answer_on_items(200, res)
 
     def do_post(self, storage, entry, provider, archive, action, media, tags_mode, pass_mode):
         # ref: reference, id string from client media archive, possibly concatenated with archive id, etc.
@@ -406,14 +421,17 @@ class MediaSearch(object):
         #
 
         if not storage:
-            return False
+            return self._answer_on_wrong(500)
         if MEDIA_ENTRY_NAME != entry:
-            return False
+            logging.warning('POST request: unknown entry')
+            return self._answer_on_wrong(404, 'unknown entry')
         if (not provider) or (not archive):
-            return False
+            logging.warning('POST request: provider and archive have to be specified')
+            return self._answer_on_wrong(404, 'provider and archive have to be specified')
 
         if not action in ['_insert', '_update', '_delete']:
-            return False
+            logging.warning('POST request: unknown action')
+            return self._answer_on_wrong(404, 'unknown action')
 
         # to only force the storage creation on _insert
         # end immediately if storage is not set
@@ -423,23 +441,27 @@ class MediaSearch(object):
 
         storage.set_storage(provider, archive, to_force_storage)
         if not storage.is_correct():
-            return False
+            return self._answer_on_wrong(500)
 
         if not storage.storage_set():
-            return bool(pass_mode)
+            if pass_mode:
+                return self._answer_on_items(200, [])
+            else:
+                return self._answer_on_wrong(404)
 
         res = None
 
         if 'ref' in media:
             if not ALLOWED_SPEC.match(media['ref']):
-                return False
+                logging.warning('POST request: bad ref parameter')
+                return self._answer_on_wrong(404, 'ref has to be a-zA-Z_-')
 
         if action in ['_insert']:
             media_use = {'tags': media['tags']}
             for one_part in ['ref', 'url', 'mime']:
                 if not media[one_part]:
                     logging.warning('insert media hash, not passed through checks: ' + str(one_part))
-                    return False
+                    return self._answer_on_wrong(404, 'insert media hash, not passed through checks: ' + str(one_part))
                 media_use[one_part] = media[one_part]
             res = self._action_insert_media_hash(storage, media_use, pass_mode)
 
@@ -448,13 +470,14 @@ class MediaSearch(object):
             for one_part in ['ref']:
                 if not media[one_part]:
                     logging.warning('update media hash, not passed through checks: ' + str(one_part))
-                    return False
+                    return self._answer_on_wrong(404, 'update media hash, not passed through checks: ' + str(one_part))
                 media_use[one_part] = media[one_part]
 
             if not tags_mode:
                 tags_mode = 'set'
             if not tags_mode in ['set', 'add', 'pop']:
-                return False
+                logging.warning('unknown tags mode: ' + str(tags_mode))
+                return self._answer_on_wrong(404, 'unknown tags mode: ' + str(tags_mode))
 
             res = self._action_update_media_hash(storage, media_use, tags_mode, pass_mode)
 
@@ -463,8 +486,11 @@ class MediaSearch(object):
             for one_part in ['ref']:
                 if not media[one_part]:
                     logging.warning('delete media hash, not passed through checks: ' + str(one_part))
-                    return False
+                    return self._answer_on_wrong(404, 'delete media hash, not passed through checks: ' + str(one_part))
                 media_use[one_part] = media[one_part]
             res = self._action_delete_media_hash(storage, media_use, pass_mode)
 
-        return res
+        if res is None:
+            return self._answer_on_wrong(404)
+        else:
+            return self._answer_on_items(200, res)
