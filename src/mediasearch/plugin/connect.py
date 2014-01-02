@@ -58,7 +58,7 @@ try:
 except:
     logging.error('Flask framework is not installed')
     os._exit(1)
-from mediasearch.app.dbs import mongo_dbs, mediasearch_db_key
+from mediasearch.app.dbs import mongo_dbs
 from mediasearch.plugin.process import MediaSearch
 from mediasearch.plugin.storage import HashStorage
 
@@ -73,6 +73,28 @@ POST_PARAM_STRING = ['ref', 'url', 'mime']
 POST_PARAM_LIST = ['tags']
 TAGS_MODE_PARAM = 'mode'
 
+def _put_to_str(value):
+    if value is None:
+        return None
+    if not value:
+        return ''
+
+    output = ''
+
+    if not output:
+        try:
+            output = str(value)
+        except:
+            output = ''
+
+    if not output:
+        try:
+            output = value.encode('utf8', 'ignore')
+        except:
+            output = ''
+
+    return output
+
 mediasearch_plugin = Blueprint('mediasearch_plugin', __name__)
 
 @mediasearch_plugin.route('/', defaults={'entry': None, 'provider': None, 'archive': None, 'action': None}, methods=['GET'])
@@ -85,7 +107,12 @@ def mediasearch_get(entry, provider, archive, action):
     Connector for GET requests
     '''
 
-    media_storage = HashStorage(mongo_dbs[mediasearch_db_key])
+    entry = _put_to_str(entry)
+    provider = _put_to_str(provider)
+    archive = _put_to_str(archive)
+    action = _put_to_str(action)
+
+    media_storage = HashStorage(mongo_dbs.get_db())
 
     media_params = {}
 
@@ -94,7 +121,7 @@ def mediasearch_get(entry, provider, archive, action):
         if cur_par in request.args:
             cur_val_set = request.args.get(cur_par)
             if cur_val_set:
-                media_params[cur_par] = cur_val_set
+                media_params[cur_par] = _put_to_str(cur_val_set)
 
     for cur_par in GET_PARAM_LIST:
         media_params[cur_par] = None
@@ -102,7 +129,7 @@ def mediasearch_get(entry, provider, archive, action):
             cur_val_set = []
             for got_val in request.args.getlist(cur_par):
                 if got_val:
-                    cur_val_set.append(got_val)
+                    cur_val_set.append(_put_to_str(got_val))
             if cur_val_set:
                 media_params[cur_par] = cur_val_set
 
@@ -114,14 +141,14 @@ def mediasearch_get(entry, provider, archive, action):
                 cur_val = []
                 for got_subval in got_val.split(GET_PARAM_SPLIT):
                     if got_subval:
-                        cur_val.append(got_subval)
+                        cur_val.append(_put_to_str(got_subval))
                 if cur_val:
                     cur_val_set.append(cur_val)
             if cur_val_set:
                 media_params[cur_par] = cur_val_set
 
     try:
-        search = mediasearch.MediaSearch()
+        search = MediaSearch()
         rv = search.do_get(media_storage, entry, provider, archive, action, media_params)
         return rv
     except:
@@ -134,11 +161,16 @@ def mediasearch_post(entry, provider, archive, action):
     Connector for POST requests
     '''
 
-    media_storage = HashStorage(mongo_dbs[mediasearch_db_key])
+    entry = _put_to_str(entry)
+    provider = _put_to_str(provider)
+    archive = _put_to_str(archive)
+    action = _put_to_str(action)
+
+    media_storage = HashStorage(mongo_dbs.get_db())
 
     pass_value = False
     if PASS_PARAM in request.args:
-        pass_value_got = str(request.args[PASS_PARAM])
+        pass_value_got = _put_to_str(request.args[PASS_PARAM])
         if pass_value_got:
             for test_start in PASS_PARAM_TRUE:
                 if pass_value_got.startswith(test_start):
@@ -147,20 +179,18 @@ def mediasearch_post(entry, provider, archive, action):
 
     tags_mode = None
     if TAGS_MODE_PARAM in request.args:
-        tags_mode_got = str(request.args[TAGS_MODE_PARAM])
+        tags_mode_got = _put_to_str(request.args[TAGS_MODE_PARAM])
         if tags_mode_got:
             tags_mode = tags_mode_got
 
     try:
         media_data = request.get_json(True, False, False)
-        if type(media_info) == str:
-            media_data = json.loads(media_data)
     except:
         media_data = None
 
     if not media_data:
         if DATA_PARAM in request.args:
-            data_value_got = str(request.args[DATA_PARAM])
+            data_value_got = _put_to_str(request.args[DATA_PARAM])
             if data_value_got:
                 try:
                     media_data = json.loads(data_value_got)
@@ -176,29 +206,28 @@ def mediasearch_post(entry, provider, archive, action):
     media_info = {}
 
     for cur_par in POST_PARAM_STRING:
-        media_params[cur_par] = None
+        media_info[cur_par] = None
         if cur_par in media_data:
             cur_val_set = media_data[cur_par]
             if cur_val_set:
-                media_info[cur_par] = str(cur_val_set)
+                media_info[cur_par] = _put_to_str(cur_val_set)
 
     for cur_par in POST_PARAM_LIST:
-        media_params[cur_par] = None
+        media_info[cur_par] = None
         if cur_par in media_data:
             cur_val_set = media_data[cur_par]
             if cur_val_set:
-                if type(cur_val_set) == str:
-                    cur_val_set = [cur_val_set]
+                cur_list = []
                 if type(cur_val_set) == list:
-                    cur_list = []
                     for cur_val in cur_val_set:
-                        if type(cur_val) == str:
-                            cur_list.append(cur_val)
-                    if cur_list:
-                        media_info[cur_par] = str(cur_val_set)
+                        cur_list.append(_put_to_str(cur_val))
+                else:
+                    cur_list = [_put_to_str(cur_val_set)]
+                if cur_list:
+                    media_info[cur_par] = cur_list
 
     try:
-        search = mediasearch.MediaSearch()
+        search = MediaSearch()
         rv = search.do_post(media_storage, entry, provider, archive, action, media_info, tags_mode, pass_value)
         return rv
     except:

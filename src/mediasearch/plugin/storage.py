@@ -45,20 +45,20 @@ class HashStorage(object):
 
     def __init__(self, storage=None):
         self.storage = storage
-        self.is_correct = bool(self.storage)
+        self.correct = bool(self.storage)
         self.loaded_hashes = None
         self.collection_name = ''
         self.collection_set = False
 
     def is_correct(self):
-        return self.is_correct
+        return self.correct
 
     def list_providers(self):
         try:
             collection = self.storage.db[COLLECTION_GENERAL]
             providers = collection.distinct(PROVIDER_FIELD)
         except:
-            self.is_correct = False
+            self.correct = False
             return None
 
         if providers:
@@ -71,7 +71,7 @@ class HashStorage(object):
             collection = self.storage.db[COLLECTION_GENERAL]
             archives = collection.find({PROVIDER_FIELD: provider}).distinct(ARCHIVE_FIELD)
         except:
-            self.is_correct = False
+            self.correct = False
             return None
 
         if archives:
@@ -83,7 +83,7 @@ class HashStorage(object):
         return self.collection_set
 
     def set_storage(self, provider, archive, force):
-        if not self.is_correct:
+        if not self.correct:
             return False
 
         # this is a simple way, lacking atomicity
@@ -97,7 +97,7 @@ class HashStorage(object):
             if doc:
                 rank = str(doc['_id'])
         except:
-            self.is_correct = False
+            self.correct = False
             return False
 
         if rank is not None:
@@ -117,7 +117,7 @@ class HashStorage(object):
                     collection.save({'_id': rank, PROVIDER_FIELD: provider, ARCHIVE_FIELD: archive, CREATED_FIELD: timepoint, UPDATED_FIELD: timepoint})
                     self.collection_set = True
                 except:
-                    self.is_correct = False
+                    self.correct = False
                     self.collection_set = False
                     return False
 
@@ -128,7 +128,7 @@ class HashStorage(object):
 
     def get_ref_media(self, id_value):
 
-        if not self.is_correct:
+        if not self.correct:
             return None
         if not self.collection_name:
             return None
@@ -137,8 +137,11 @@ class HashStorage(object):
         try:
             collection = self.storage.db[self.collection_name]
             item = collection.find_one({'_id': id_value})
+            if item:
+                item['ref'] = item['_id']
+                del(item['_id'])
         except:
-            self.is_correct = False
+            self.correct = False
             return None
 
         if not item:
@@ -157,7 +160,11 @@ class HashStorage(object):
         for one_ref in ref_ids:
             if not one_ref:
                 continue
-            ref_ids_use.append(str(one_ref))
+            try:
+                one_ref = str(one_ref)
+            except:
+                continue
+            ref_ids_use.append(one_ref)
 
         if not ref_ids_use:
             return None
@@ -222,11 +229,11 @@ class HashStorage(object):
             for one_tag_sub in one_tag_got:
                 if not one_tag_sub:
                     continue
-                one_tag_set.append({'tags': {'$not': one_tag_sub}})
+                one_tag_set.append({'tags': {'$ne': one_tag_sub}})
             if not one_tag_set:
                 continue
             if 1 == len(one_tag_set):
-                tags_without_use.append(one_tag_set)
+                tags_without_use.append(one_tag_set[0])
             else:
                 tags_without_use.append({'$or': one_tag_set})
 
@@ -246,7 +253,11 @@ class HashStorage(object):
             if type(order) is not list:
                 order = [order]
                 for one_sort in order:
-                    one_sort = str(one_sort).lower()
+                    one_sort = ''
+                    try:
+                        one_sort = str(one_sort).lower()
+                    except:
+                        continue
                     if one_sort.startswith('ref'):
                         order_list.append(('_id', 1))
                     if one_sort.startswith('cre'):
@@ -262,7 +273,7 @@ class HashStorage(object):
         return order_list
 
     def get_alike_media(self, ref_ids, media_class=None, tags_with=None, tags_without=None, order=None, offset=None, limit=None):
-        if not self.is_correct:
+        if not self.correct:
             return []
 
         if not self.collection_set:
@@ -275,6 +286,7 @@ class HashStorage(object):
         test_refs = []
         test_evals = {}
         try:
+            db_collection = self.storage.db[self.collection_name]
             cursor = db_collection.find(search_struct)
             for entry in cursor:
                 if ('alike' not in entry) or (not entry['alike']):
@@ -300,7 +312,7 @@ class HashStorage(object):
                             continue
                         test_evals[cur_ref].append(one_eval)
         except:
-            self.is_correct = False
+            self.correct = False
             return []
 
         if not test_refs:
@@ -334,6 +346,7 @@ class HashStorage(object):
         take_refs = []
         take_alikes = {}
         try:
+            db_collection = self.storage.db[self.collection_name]
             cursor = db_collection.find(search_struct).sort(order_list)
             for entry in cursor:
                 take_refs.append(entry['_id'])
@@ -349,7 +362,7 @@ class HashStorage(object):
                     cur_take[one_field] = entry[one_field]
                 take_alikes[entry['_id']] = cur_take
         except:
-            self.is_correct = False
+            self.correct = False
             return []
 
         if not take_refs:
@@ -395,15 +408,24 @@ class HashStorage(object):
 
         for cur_ref in take_refs:
             cur_item = {'ref': cur_ref}
-            cur_item['evals'] = eval_values[cur_ref]
-            for one_part in take_alikes[cur_ref]:
+            use_evals = []
+            for one_eval in eval_values[cur_ref]:
+                try:
+                    if ('diff' in one_eval) and (one_eval['diff'] is not None):
+                        one_eval['diff'] = int(one_eval['diff'])
+                except:
+                    pass
+                use_evals.append(one_eval)
+            cur_item['evals'] = use_evals
+            cur_entry = take_alikes[cur_ref]
+            for one_part in cur_entry:
                 cur_item[one_part] = cur_entry[one_part]
             output.append(cur_item)
 
         return output
 
     def get_class_media(self, ref_ids=None, media_class=None, tags_with=None, tags_without=None, order=None, offset=None, limit=None):
-        if not self.is_correct:
+        if not self.correct:
             return []
 
         if not self.collection_set:
@@ -440,6 +462,7 @@ class HashStorage(object):
         output = []
 
         try:
+            db_collection = self.storage.db[self.collection_name]
             cursor = db_collection.find(search_struct).sort(order_list)
             if offset is not None:
                 cursor = cursor.skip(offset)
@@ -460,13 +483,13 @@ class HashStorage(object):
                 output.append(cur_item)
 
         except:
-            self.is_correct = False
+            self.correct = False
             return []
 
         return output
 
     def load_class_hashes(self, media_class):
-        if not self.is_correct:
+        if not self.correct:
             return False
 
         self.loaded_hashes = None
@@ -480,14 +503,14 @@ class HashStorage(object):
             collection = self.storage.db[self.collection_name]
             self.loaded_hashes = collection.find({'class': media_class})
         except:
-            self.is_correct = False
+            self.correct = False
             self.loaded_hashes = None
             return False
 
         return True
 
     def get_loaded_hash(self):
-        if not self.is_correct:
+        if not self.correct:
             return None
 
         if not self.loaded_hashes:
@@ -499,7 +522,26 @@ class HashStorage(object):
         except:
             entry = None
 
-        if entry is None:
+        entry_id = None
+        if entry and not entry_id:
+            try:
+                entry_id = str(entry['_id'])
+            except:
+                entry_id = None
+
+        if entry and not entry_id:
+            try:
+                entry_id = entry['_id'].encode('utf8', 'ignore')
+            except:
+                entry_id = None
+
+        if entry and not entry_id:
+            try:
+                entry_id = entry['_id']
+            except:
+                entry_id = None
+
+        if (entry is None) or (entry_id is None):
             try:
                 self.loaded_hashes.close()
             except:
@@ -507,11 +549,11 @@ class HashStorage(object):
             self.loaded_hashes = None
             return None
 
-        rv = {'ref': entry['_id'], 'hashes': entry['hashes']}
+        rv = {'ref': entry_id, 'hashes': entry['hashes']}
         return rv
 
     def save_new_media(self, store_fields, pass_mode):
-        if not self.is_correct:
+        if not self.correct:
             return None
         if not self.collection_name:
             return None
@@ -522,24 +564,26 @@ class HashStorage(object):
 
         id_value = store_fields[save_take_id]
 
-        #if not pass_mode:
-        if True:
-            # we need to remove old references, if replacing the media; this has to be manged outside this storage connector
-            try:
-                collection = self.storage.db[self.collection_name]
-                old_item = collection.find_one({'_id': id_value})
-                if old_item:
-                    return None
-            except:
-                self.is_correct = False
+        # we need to remove old references, if replacing the media
+        # this is manged outside this storage connector
+        try:
+            collection = self.storage.db[self.collection_name]
+            old_item = collection.find_one({'_id': id_value})
+            if old_item:
                 return None
+        except:
+            self.correct = False
+            return None
 
         save_data = {'_id': id_value}
 
         for part in save_take_string:
             save_data[part] = ''
             if store_fields[part]:
-                save_data[part] = str(store_fields[part])
+                try:
+                    save_data[part] = str(store_fields[part])
+                except:
+                    continue
 
         for part in save_take_list:
             save_data[part] = []
@@ -559,7 +603,7 @@ class HashStorage(object):
             collection = self.storage.db[self.collection_name]
             collection.save(save_data)
         except:
-            self.is_correct = False
+            self.correct = False
             return None
 
         return id_value
@@ -568,25 +612,27 @@ class HashStorage(object):
         # http://docs.mongodb.org/manual/tutorial/modify-documents/
         # http://docs.mongodb.org/manual/reference/operator/update/
 
-        if not self.is_correct:
+        if not self.correct:
             return False
         if not self.collection_name:
             return False
         if not alike_item:
             return False
 
+        timepoint = datetime.datetime.utcnow()
+
         try:
             collection = self.storage.db[self.collection_name]
-            collection.update({'_id': id_value}, {'$push': {'alike': alike_item}}, upsert=False)
+            collection.update({'_id': id_value}, {'$push': {'alike': alike_item}, '$set': {RELIKED_FIELD: timepoint}}, upsert=False)
         except:
-            # it may fail if the updated media was removed meanwhile, thus not setting the is_correct flag here
+            # it may fail if the updated media was removed meanwhile, thus not setting the correct flag here
             return False
 
         return True
 
     def set_media_tags(self, id_value, tags, set_mode, pass_mode):
 
-        if not self.is_correct:
+        if not self.correct:
             return False
         if not self.collection_name:
             return False
@@ -594,10 +640,10 @@ class HashStorage(object):
         try:
             collection = self.storage.db[self.collection_name]
         except:
-            self.is_correct = False
+            self.correct = False
             return False
 
-        if not set_mode in ['set', 'add', 'del']:
+        if not set_mode in ['set', 'add', 'pop']:
             return False
 
         if not tags:
@@ -610,23 +656,25 @@ class HashStorage(object):
             if one_tag and (one_tag not in tag_seq):
                 tag_seq.append(one_tag)
 
+        timepoint = datetime.datetime.utcnow()
+
         if set_mode == 'set':
             try:
-                collection.update({'_id': id_value}, {'$set': {'tags': tag_seq}}, upsert=False)
+                collection.update({'_id': id_value}, {'$set': {'tags': tag_seq, UPDATED_FIELD: timepoint}}, upsert=False)
             except:
                 return False
 
         if set_mode == 'add':
             if tag_seq:
                 try:
-                    collection.update({'_id': id_value}, {'$addToSet': {'tags': {'$each': tag_seq}}}, upsert=False)
+                    collection.update({'_id': id_value}, {'$addToSet': {'tags': {'$each': tag_seq}}, '$set': {UPDATED_FIELD: timepoint}}, upsert=False)
                 except:
                     return False
 
         if set_mode == 'pop':
             if tag_seq:
                 try:
-                    collection.update({'_id': id_value}, {'$pullAll': {'tags': tags}}, upsert=False)
+                    collection.update({'_id': id_value}, {'$pullAll': {'tags': tags}, '$set': {UPDATED_FIELD: timepoint}}, upsert=False)
                 except:
                     return False
 
@@ -634,7 +682,7 @@ class HashStorage(object):
 
     def delete_one_media(self, id_value, pass_mode):
 
-        if not self.is_correct:
+        if not self.correct:
             return False
         if not self.collection_name:
             return False
@@ -643,30 +691,36 @@ class HashStorage(object):
             collection = self.storage.db[self.collection_name]
             collection.remove({'_id': id_value})
         except:
-            self.is_correct = False
+            self.correct = False
             return False
 
         return True
 
     def excise_alike_media(self, id_value, id_alike, pass_mode):
 
-        if not self.is_correct:
+        if not self.correct:
             return False
         if not self.collection_name:
             return False
 
         if not id_alike:
             return False
-        id_alike = str(id_alike)
+
+        try:
+            id_alike = str(id_alike)
+        except:
+            return False
 
         for check_char in ['\\', '\'', '"']:
             if check_char in id_alike:
                 return False
-        excise_spec = 'this.ref == "' + str(id_alike) + '"'
+        excise_spec = 'this.ref == "' + id_alike + '"'
+
+        timepoint = datetime.datetime.utcnow()
 
         try:
             collection = self.storage.db[self.collection_name]
-            collection.update({'_id': id_value}, {'$pull': {'alike': {'$where': excise_spec}}}, upsert=False)
+            collection.update({'_id': id_value}, {'$pull': {'alike': {'$where': excise_spec}}, '$set': {RELIKED_FIELD: timepoint}}, upsert=False)
         except:
             return bool(pass_mode)
 

@@ -4,37 +4,43 @@
 # Performs media hashing, hash storage and (perceptual) similarity search
 #
 
-import sys, os, logging
-import tempfile, urllib2
+import sys, os, logging, datetime
+import json, tempfile, urllib2
 import re, operator
 import Image
-import imagehash
+from mediasearch.algs import imagehash
+
+try:
+    unicode()
+except:
+    unicode = str
 
 BLOCK_SIZE_GET_REMOTE = 8192
-ALLOWED_SPEC = re.compile('^[\d\w_-]+$')
+ALLOWED_SPEC = re.compile('^[\d\w_,.-]+$')
 MEDIA_ENTRY_NAME = 'media'
 
 class MediaSearch(object):
     known_media_types = {'image' : ['png', 'jpg', 'jpeg', 'pjpeg', 'gif', 'bmp', 'x-ms-bmp', 'tiff']}
     known_url_types = ['file', 'http', 'https']
 
-    difference_threshold = {0:0, 8:8, 16:20, 32:50}
     hash_methods = {
         'image_phash': {
             'media': ['image'],
             'method': lambda x, y, z: imagehash.phash(Image.open(y), z),
-            'dist': lambda x, y: (float(x) / (y * y)),
+            'dist': lambda x, y: (float(x) / (64)),
             'dims': [16],
-            'repr': imagehash.binary_array_to_hex,
-            'obj': imagehash.hex_to_hash
+            'repr': lambda x: str(imagehash.binary_array_to_hex(x.hash)),
+            'obj': imagehash.hex_to_hash,
+            'lims': {0:0, 8:8}
         },
         'image_dhash': {
             'media': ['image'],
             'method': lambda x, y, z: imagehash.dhash(Image.open(y), z),
             'dist': lambda x, y: (float(x) / (y * y)),
             'dims': [16],
-            'repr': imagehash.binary_array_to_hex,
-            'obj': imagehash.hex_to_hash
+            'repr': lambda x: str(imagehash.binary_array_to_hex(x.hash)),
+            'obj': imagehash.hex_to_hash,
+            'lims': {0:0, 8:8, 16:20, 32:50}
         }
     }
 
@@ -71,11 +77,10 @@ class MediaSearch(object):
             cur_info = self.hash_methods[cur_name]
             if not media_class in cur_info['media']:
                 continue
-            if not media_type in cur_info['media'][media_class]:
-                continue
 
             cur_meth = cur_info['method']
             cur_flatten = cur_info['repr']
+            cur_obj = cur_info['obj']
             for cur_dim in cur_info['dims']:
                 try:
                     cur_hash = cur_meth(media_type, local_path, cur_dim)
@@ -83,6 +88,9 @@ class MediaSearch(object):
                         continue
                     cur_repr = cur_flatten(cur_hash)
                     if cur_repr is None:
+                        continue
+                    cur_hash = cur_obj(cur_repr)
+                    if cur_hash is None:
                         continue
                     prepared_hashes.append({'method': cur_name, 'dim': cur_dim, 'obj': cur_hash, 'repr': cur_repr})
                 except:
@@ -95,30 +103,32 @@ class MediaSearch(object):
         if not method_name in self.hash_methods:
             return None
         method_info = self.hash_methods[method_name]
-
+        difference_threshold = method_info['lims']
         try:
-            if isinstance(cmp1, str):
+            if (type(cmp1) is str) or (type(cmp1) is unicode):
                 cmp1 = method_info['obj'](cmp1)
-            if isinstance(cmp2, str):
+            if (type(cmp2) is str) or (type(cmp2) is unicode):
                 cmp2 = method_info['obj'](cmp2)
             diff = operator.sub(cmp1, cmp2)
+            if diff is None:
+                return None
             dist = method_info['dist'](diff, dimension)
         except:
             logging.warning('can not compare media hashes: ' + str(method_name))
             return None
 
         threshold = 0
-        if dimension in self.difference_threshold:
-            threshold = self.difference_threshold[dimension]
+        if dimension in difference_threshold:
+            threshold = difference_threshold[dimension]
         else:
             test_dim = dimension - 1
             while test_dim >= 0:
-                if test_dim in self.difference_threshold:
-                    threshold = self.difference_threshold[test_dim]
+                if test_dim in difference_threshold:
+                    threshold = difference_threshold[test_dim]
                     break
                 test_dim -= 1
 
-        return {'diff': diff, 'dist': dist, 'similar': (diff <= test_dim)}
+        return {'diff': diff, 'dist': dist, 'similar': (diff <= threshold)}
 
     def _proc_remove_media(self, media_storage, media_data, pass_mode):
 
@@ -139,10 +149,10 @@ class MediaSearch(object):
         media_type_parts = str(media_type).strip().split('/')
         if 2 != len(media_type_parts):
             return False
-        if not media_type_parts[0] in known_media_types:
+        if not media_type_parts[0] in self.known_media_types:
             logging.warning('unknown media class: ' + str(media_type_parts[0]))
             return False
-        if not media_type_parts[1] in known_media_types[media_type_parts[0]]:
+        if not media_type_parts[1] in self.known_media_types[media_type_parts[0]]:
             logging.warning('unknown media type: ' + str(media_type))
             return False
 
@@ -206,19 +216,37 @@ class MediaSearch(object):
                     cur_compared = self._alg_compare_hashes(cmp_hash_part['method'], cmp_hash_part['dim'], cmp_hash_part['obj'], oth_hash_part['repr'])
                     if (not cur_compared) or (not cur_compared['similar']):
                         continue
-                    cur_diffs.append({'method': cmp_hash_part['method'], 'dim': cmp_hash_part['dim'], 'diff': cur_compared['diff'], 'dist': cur_compared['dist']})
+                    cur_diffs.append({'method': cmp_hash_part['method'], 'dim': cmp_hash_part['dim'], 'diff': str(cur_compared['diff']), 'dist': cur_compared['dist']})
             if cur_diffs:
                 found_similar.append({'ref': oth_hash_id, 'evals': cur_diffs})
 
         return found_similar
 
+    def _out_get_base_path(self, entry=None, provider=None, archive=None, action=None):
+        use_parts = []
+        action_used = True
+        for one_part in [entry, provider, archive, action]:
+            if one_part is None:
+                action_used = False
+                break
+            use_parts.append(str(one_part))
+
+        base_path = '/'.join(use_parts)
+        if not action_used:
+            base_path = base_path + '/'
+
+        if not base_path.startswith('/'):
+            base_path = '/' + base_path
+
+        return base_path
+
     def _action_list_entries(self, storage):
-        links = [{'path': '/' + str(MEDIA_ENTRY_NAME)}]
+        links = [{'entry': MEDIA_ENTRY_NAME, 'path': self._out_get_base_path(MEDIA_ENTRY_NAME)}]
 
         return links
 
     def _action_list_providers(self, storage, entry):
-        entries = storage.list_providers()
+        providers = storage.list_providers()
 
         links = []
 
@@ -228,7 +256,7 @@ class MediaSearch(object):
         for one_provider in providers:
             if not one_provider:
                 continue
-            links.append({'path': '/' + str(MEDIA_ENTRY_NAME) + '/' + str(one_provider)})
+            links.append({'provider': one_provider, 'path': self._out_get_base_path(entry, one_provider)})
 
         return links
 
@@ -243,23 +271,24 @@ class MediaSearch(object):
         for one_archive in archives:
             if not one_archive:
                 continue
-            links.append({'path': '/' + str(MEDIA_ENTRY_NAME) + '/' + str(entry) + '/' + str(one_archive)})
+            links.append({'archive': one_archive, 'path': self._out_get_base_path(entry, provider, one_archive)})
 
         return links
 
     def _action_list_actions(self, storage, entry, provider, archive):
-        base_path = '/' + str(MEDIA_ENTRY_NAME) + '/' + str(entry) + '/' + str(archive) + '/'
 
         links = []
 
         action_list = {
-            'GET': ['_select', '_search'],
-            'POST': ['_insert', '_update', '_delete'],
+            'GET': ['select', 'search'],
+            'POST': ['insert', 'update', 'delete'],
         }
+        action_prefix = '_'
 
         for method in action_list:
             for action in action_list[method]:
-                links.append({'path': base_path + str(action), 'method': str(method)})
+                action_path = self._out_get_base_path(entry, provider, archive, (action_prefix + action))
+                links.append({'action': str(action), 'path': action_path, 'method': str(method)})
 
         return links
 
@@ -267,7 +296,7 @@ class MediaSearch(object):
         res = storage.get_class_media(params['ref'], params['class'], params['with'], params['without'], params['order'], params['offset'], params['limit'])
         return res
 
-    def _action_search_media(self, storage, params_use):
+    def _action_search_media(self, storage, params):
         res = storage.get_alike_media(params['ref'], params['class'], params['with'], params['without'], params['order'], params['offset'], params['limit'])
         return res
 
@@ -299,12 +328,14 @@ class MediaSearch(object):
             similar = []
         store_fields['alike'] = similar
 
-        media_id = media_storage.save_new_media(store_fields, pass_mode)
-        if media_id is None:
+        media_ref = media_storage.save_new_media(store_fields, pass_mode)
+        if media_ref is None:
             return False
 
         for similar_item in similar:
-            media_storage.append_alike_media(similar_item['ref'], {'ref': media_id, 'evals': similar_item['evals']})
+            media_storage.append_alike_media(similar_item['ref'], {'ref': media_ref, 'evals': similar_item['evals']})
+
+        return [{'ref': media_ref}]
 
     def _action_update_media_hash(self, media_storage, media_fields, tags_mode, pass_mode):
 
@@ -315,7 +346,10 @@ class MediaSearch(object):
 
         rv = media_storage.set_media_tags(media_fields['ref'], media_fields['tags'], tags_mode, pass_mode)
 
-        return rv
+        if not rv:
+            return None
+
+        return [{'ref': media_fields['ref']}]
 
     def _action_delete_media_hash(self, media_storage, media_fields, pass_mode):
 
@@ -325,15 +359,23 @@ class MediaSearch(object):
 
         rv = self._proc_remove_media(media_storage, check_media, pass_mode)
 
-        return rv
+        return bool(rv)
 
     def _answer_on_wrong(self, status=404, message=''):
         return (json.dumps({'_message': message}), status, {'Content-Type': 'application/json'})
 
-    def _answer_on_items(self, status=200, items=None):
+    def _answer_on_items(self, status=200, links=None, items=None):
         if not items:
             items = []
-        return (json.dumps({'_items': items}), status, {'Content-Type': 'application/json'})
+        if not links:
+            links = []
+        output = {
+            '_links': links,
+            '_items': items
+        }
+
+        dt_handler = lambda obj: obj.isoformat() if isinstance(obj, datetime.datetime) or isinstance(obj, datetime.date) else json.JSONEncoder().default(obj)
+        return (json.dumps(output, default=dt_handler), status, {'Content-Type': 'application/json'})
 
     def do_get(self, storage, entry, provider, archive, action, params):
 
@@ -341,6 +383,17 @@ class MediaSearch(object):
             return self._answer_on_wrong(500)
 
         res = None
+
+        if ('ref' in params) and params['ref']:
+            test_refs = params['ref']
+            if type(test_refs) is not list:
+                test_refs = [test_refs]
+            for one_ref in test_refs:
+                if not ALLOWED_SPEC.match(str(one_ref)):
+                    logging.warning('POST request: bad ref parameter')
+                    return self._answer_on_wrong(404, 'ref has to be a-zA-Z_-')
+
+        links = [{'_base': self._out_get_base_path(entry, provider, archive)}]
 
         if action is None:
             # do basic lists
@@ -379,39 +432,35 @@ class MediaSearch(object):
             search_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
 
             if action in ['_select']:
-                if (not media['ref']) and (not media['class']):
+                if (not params['ref']) and (not params['class']):
                     logging.warning('select media: neither ref nor class provided')
                     return self._answer_on_wrong(404, 'select media: neither ref nor class provided')
 
-                if not storage.storage_set():
-                    return self._answer_on_items(200, [])
-
-                params_use = {}
-                select_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
-                for one_key in select_keys:
-                    params_use[one_key] = params[one_key]
-
-                res = self._action_select_media(storage, params_use)
+                res = []
+                if storage.storage_set():
+                    params_use = {}
+                    select_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
+                    for one_key in select_keys:
+                        params_use[one_key] = params[one_key]
+                    res = self._action_select_media(storage, params_use)
 
             if action in ['_search']:
-                if not media['ref']:
+                if not params['ref']:
                     logging.warning('search media: ref not provided')
                     return self._answer_on_wrong(404, 'search media: ref not provided')
 
-                if not storage.storage_set():
-                    return self._answer_on_items(200, [])
-
-                params_use = {}
-                search_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
-                for one_key in search_keys:
-                    params_use[one_key] = params[one_key]
-
-                res = self._action_search_media(storage, params_use)
+                res = []
+                if storage.storage_set():
+                    params_use = {}
+                    search_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
+                    for one_key in search_keys:
+                        params_use[one_key] = params[one_key]
+                    res = self._action_search_media(storage, params_use)
 
         if res is None:
             return self._answer_on_wrong(404)
         else:
-            return self._answer_on_items(200, res)
+            return self._answer_on_items(200, links, res)
 
     def do_post(self, storage, entry, provider, archive, action, media, tags_mode, pass_mode):
         # ref: reference, id string from client media archive, possibly concatenated with archive id, etc.
@@ -436,23 +485,25 @@ class MediaSearch(object):
         # to only force the storage creation on _insert
         # end immediately if storage is not set
         to_force_storage = False
-        if action == 'insert':
+        if action == '_insert':
             to_force_storage = True
 
         storage.set_storage(provider, archive, to_force_storage)
         if not storage.is_correct():
             return self._answer_on_wrong(500)
 
+        links = [{'_base': self._out_get_base_path(entry, provider, archive)}]
+
         if not storage.storage_set():
             if pass_mode:
-                return self._answer_on_items(200, [])
+                return self._answer_on_items(200, links, [])
             else:
                 return self._answer_on_wrong(404)
 
         res = None
 
-        if 'ref' in media:
-            if not ALLOWED_SPEC.match(media['ref']):
+        if ('ref' in media) and media['ref']:
+            if not ALLOWED_SPEC.match(str(media['ref'])):
                 logging.warning('POST request: bad ref parameter')
                 return self._answer_on_wrong(404, 'ref has to be a-zA-Z_-')
 
@@ -464,6 +515,8 @@ class MediaSearch(object):
                     return self._answer_on_wrong(404, 'insert media hash, not passed through checks: ' + str(one_part))
                 media_use[one_part] = media[one_part]
             res = self._action_insert_media_hash(storage, media_use, pass_mode)
+            if not res:
+                res = None
 
         if action in ['_update']:
             media_use = {'tags': media['tags']}
@@ -480,6 +533,8 @@ class MediaSearch(object):
                 return self._answer_on_wrong(404, 'unknown tags mode: ' + str(tags_mode))
 
             res = self._action_update_media_hash(storage, media_use, tags_mode, pass_mode)
+            if not res:
+                res = None
 
         if action in ['_delete']:
             media_use = {}
@@ -489,8 +544,12 @@ class MediaSearch(object):
                     return self._answer_on_wrong(404, 'delete media hash, not passed through checks: ' + str(one_part))
                 media_use[one_part] = media[one_part]
             res = self._action_delete_media_hash(storage, media_use, pass_mode)
+            if not res:
+                res = None
+            else:
+                res = []
 
         if res is None:
             return self._answer_on_wrong(404)
         else:
-            return self._answer_on_items(200, res)
+            return self._answer_on_items(200, links, res)
