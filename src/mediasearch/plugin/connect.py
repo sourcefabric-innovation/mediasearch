@@ -23,6 +23,10 @@ http://localhost:9020/media/provider_name/archive_name/
 returns list of actions
 
 POST:
+http://localhost:9020/media/provider_name/archive_name/?pass=boolean
+http://localhost:9020/media/provider_name/archive_name/_drop?pass=boolean&force=boolean
+... simple addition and removal of an archive
+
 http://localhost:9020/media/provider_name/archive_name/_action?pass=boolean&mode=tag_setting
 _action: _insert, _update, _delete
 data: {ref,url,mime,tags} for _insert, {ref,tags} for _update, {ref} for _delete
@@ -47,6 +51,7 @@ class ... case for _search: image / video / audio
 class ... case for _select(ref or class mandatory for _select): image / video / audio
 with ... tags included, several parN means all necessary, use ","-joined values for inclusion if any tag present
 without ... tags excluded, several parN means all excluded, use ","-joined vlaues for exclusion if all tags present
+threshold ... distance limit, 0...1, _search only
 order ... ref(default)|created|updated|reliked; similarity is the first sort criterion for _search
 offset ... offset for listing
 limit ... (maximal) count of items returned
@@ -64,14 +69,17 @@ from mediasearch.plugin.storage import HashStorage
 
 DATA_PARAM = 'data'
 PASS_PARAM = 'pass'
-PASS_PARAM_TRUE = ['1', 't', 'T']
-GET_PARAM_SIMPLE = ['class', 'limit', 'offset']
+FORCE_PARAM = 'force'
+BOOL_PARAM_TRUE = ['1', 't', 'T']
+GET_PARAM_SIMPLE = ['class', 'threshold', 'limit', 'offset']
 GET_PARAM_LIST = ['ref', 'order']
 GET_PARAM_LIST_DOUBLE = ['with', 'without']
 GET_PARAM_SPLIT = ','
 POST_PARAM_STRING = ['ref', 'url', 'mime']
 POST_PARAM_LIST = ['tags']
 TAGS_MODE_PARAM = 'mode'
+GET_NAT_INTEGER = ['limit', 'offset']
+GET_FLOAT = ['threshold']
 
 def _put_to_str(value):
     if value is None:
@@ -97,11 +105,11 @@ def _put_to_str(value):
 
 mediasearch_plugin = Blueprint('mediasearch_plugin', __name__)
 
-@mediasearch_plugin.route('/', defaults={'entry': None, 'provider': None, 'archive': None, 'action': None}, methods=['GET'])
-@mediasearch_plugin.route('/<entry>/', defaults={'provider': None, 'archive': None, 'action': None}, methods=['GET'])
-@mediasearch_plugin.route('/<entry>/<provider>/', defaults={'archive': None, 'action': None}, methods=['GET'])
-@mediasearch_plugin.route('/<entry>/<provider>/<archive>/', defaults={'action': None}, methods=['GET'])
-@mediasearch_plugin.route('/<entry>/<provider>/<archive>/<action>', defaults={}, methods=['GET'])
+@mediasearch_plugin.route('/', defaults={'entry': None, 'provider': None, 'archive': None, 'action': None}, methods=['GET'], strict_slashes=False)
+@mediasearch_plugin.route('/<entry>/', defaults={'provider': None, 'archive': None, 'action': None}, methods=['GET'], strict_slashes=False)
+@mediasearch_plugin.route('/<entry>/<provider>/', defaults={'archive': None, 'action': None}, methods=['GET'], strict_slashes=False)
+@mediasearch_plugin.route('/<entry>/<provider>/<archive>/', defaults={'action': None}, methods=['GET'], strict_slashes=False)
+@mediasearch_plugin.route('/<entry>/<provider>/<archive>/<action>/', defaults={}, methods=['GET'], strict_slashes=False)
 def mediasearch_get(entry, provider, archive, action):
     '''
     Connector for GET requests
@@ -121,6 +129,18 @@ def mediasearch_get(entry, provider, archive, action):
         if cur_par in request.args:
             cur_val_set = request.args.get(cur_par)
             if cur_val_set:
+                if cur_par in GET_NAT_INTEGER:
+                    try:
+                        cur_val_set = int(cur_val_set)
+                        if 0 > cur_val_set:
+                            cur_val_set = None
+                    except:
+                        cur_val_set = None
+                if cur_par in GET_FLOAT:
+                    try:
+                        cur_val_set = float(cur_val_set)
+                    except:
+                        cur_val_set = None
                 media_params[cur_par] = _put_to_str(cur_val_set)
 
     for cur_par in GET_PARAM_LIST:
@@ -155,7 +175,7 @@ def mediasearch_get(entry, provider, archive, action):
         logging.error('GET request: uncaught exception')
         return (json.dumps({'_message': 'internal server error'}), 500, {'Content-Type': 'application/json'})
 
-@mediasearch_plugin.route('/<entry>/<provider>/<archive>/<action>', defaults={}, methods=['POST'])
+@mediasearch_plugin.route('/<entry>/<provider>/<archive>/<action>/', defaults={}, methods=['POST'], strict_slashes=False)
 def mediasearch_post(entry, provider, archive, action):
     '''
     Connector for POST requests
@@ -172,9 +192,18 @@ def mediasearch_post(entry, provider, archive, action):
     if PASS_PARAM in request.args:
         pass_value_got = _put_to_str(request.args[PASS_PARAM])
         if pass_value_got:
-            for test_start in PASS_PARAM_TRUE:
+            for test_start in BOOL_PARAM_TRUE:
                 if pass_value_got.startswith(test_start):
                     pass_value = True
+                    break
+
+    force_value = False
+    if FORCE_PARAM in request.args:
+        force_value_got = _put_to_str(request.args[FORCE_PARAM])
+        if force_value_got:
+            for test_start in BOOL_PARAM_TRUE:
+                if force_value_got.startswith(test_start):
+                    force_value = True
                     break
 
     tags_mode = None
@@ -228,7 +257,7 @@ def mediasearch_post(entry, provider, archive, action):
 
     try:
         search = MediaSearch()
-        rv = search.do_post(media_storage, entry, provider, archive, action, media_info, tags_mode, pass_value)
+        rv = search.do_post(media_storage, entry, provider, archive, action, media_info, tags_mode, pass_value, force_value)
         return rv
     except:
         logging.error('POST request: uncaught exception')

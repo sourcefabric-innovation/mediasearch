@@ -1,0 +1,1 @@
+Directory for runtime PID files of the Python-based daemons of the Mediasearch system.

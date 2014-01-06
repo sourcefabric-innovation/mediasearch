@@ -7,8 +7,7 @@
 import sys, os, logging, datetime
 import json, tempfile, urllib2
 import re, operator
-import Image
-from mediasearch.algs import imagehash
+from mediasearch.algs.methods import MediaHashMethods
 
 try:
     unicode()
@@ -23,33 +22,14 @@ class MediaSearch(object):
     known_media_types = {'image' : ['png', 'jpg', 'jpeg', 'pjpeg', 'gif', 'bmp', 'x-ms-bmp', 'tiff']}
     known_url_types = ['file', 'http', 'https']
 
-    hash_methods = {
-        'image_phash': {
-            'media': ['image'],
-            'method': lambda x, y, z: imagehash.phash(Image.open(y), z),
-            'dist': lambda x, y: (float(x) / (64)),
-            'dims': [16],
-            'repr': lambda x: str(imagehash.binary_array_to_hex(x.hash)),
-            'obj': imagehash.hex_to_hash,
-            'lims': {0:0, 8:8}
-        },
-        'image_dhash': {
-            'media': ['image'],
-            'method': lambda x, y, z: imagehash.dhash(Image.open(y), z),
-            'dist': lambda x, y: (float(x) / (y * y)),
-            'dims': [16],
-            'repr': lambda x: str(imagehash.binary_array_to_hex(x.hash)),
-            'obj': imagehash.hex_to_hash,
-            'lims': {0:0, 8:8, 16:20, 32:50}
-        }
-    }
-
     def __init__(self, base_media_path='/', tmp_dir='/tmp'):
         self.base_media_path = base_media_path
         self.tmp_dir = tmp_dir
+        self.hash_methods_holder = MediaHashMethods()
+        self.hash_methods = self.hash_methods_holder.get_methods()
 
     def _ext_download_media_file(self, media_url):
-        local_file = tempfile.NamedTemporaryFile('w+b', -1, '', 'image', self.tmp_dir, False)
+        local_file = tempfile.NamedTemporaryFile('w+b', -1, '', 'media', self.tmp_dir, False)
 
         try:
             block_size = BLOCK_SIZE_GET_REMOTE
@@ -240,12 +220,18 @@ class MediaSearch(object):
 
         return base_path
 
-    def _action_list_entries(self, storage):
+    def _action_list_entries(self, storage, params):
         links = [{'entry': MEDIA_ENTRY_NAME, 'path': self._out_get_base_path(MEDIA_ENTRY_NAME)}]
 
-        return links
+        total = len(links)
+        if params['offset'] is not None:
+            links = links[params['offset']:]
+        if params['limit'] is not None:
+            links = links[:params['limit']]
 
-    def _action_list_providers(self, storage, entry):
+        return {'items': links, 'total': total}
+
+    def _action_list_providers(self, storage, entry, params):
         providers = storage.list_providers()
 
         links = []
@@ -258,9 +244,15 @@ class MediaSearch(object):
                 continue
             links.append({'provider': one_provider, 'path': self._out_get_base_path(entry, one_provider)})
 
-        return links
+        total = len(links)
+        if params['offset'] is not None:
+            links = links[params['offset']:]
+        if params['limit'] is not None:
+            links = links[:params['limit']]
 
-    def _action_list_archives(self, storage, entry, provider):
+        return {'items': links, 'total': total}
+
+    def _action_list_archives(self, storage, entry, provider, params):
         archives = storage.list_archives(provider)
 
         links = []
@@ -273,32 +265,55 @@ class MediaSearch(object):
                 continue
             links.append({'archive': one_archive, 'path': self._out_get_base_path(entry, provider, one_archive)})
 
-        return links
+        total = len(links)
+        if params['offset'] is not None:
+            links = links[params['offset']:]
+        if params['limit'] is not None:
+            links = links[:params['limit']]
 
-    def _action_list_actions(self, storage, entry, provider, archive):
+        return {'items': links, 'total': total}
+
+    def _action_list_actions(self, storage, entry, provider, archive, params):
 
         links = []
 
         action_list = {
-            'GET': ['select', 'search'],
-            'POST': ['insert', 'update', 'delete'],
+            'GET': [
+                {'name': 'select', 'action': '_select'},
+                {'name': 'search', 'action': '_search'}
+            ],
+            'POST': [
+                {'name': 'create', 'action': None},
+                {'name': 'drop', 'action': '_drop'},
+                {'name': 'insert', 'action': '_insert'},
+                {'name': 'update', 'action': '_update'},
+                {'name': 'delete', 'action': '_delete'}
+            ],
         }
-        action_prefix = '_'
 
         for method in action_list:
             for action in action_list[method]:
-                action_path = self._out_get_base_path(entry, provider, archive, (action_prefix + action))
-                links.append({'action': str(action), 'path': action_path, 'method': str(method)})
+                action_path = self._out_get_base_path(entry, provider, archive, action['action'])
+                links.append({'action': str(action['name']), 'path': action_path, 'method': str(method)})
 
-        return links
+        total = len(links)
+        if params['offset'] is not None:
+            links = links[params['offset']:]
+        if params['limit'] is not None:
+            links = links[:params['limit']]
+
+        return {'items': links, 'total': total}
 
     def _action_select_media(self, storage, params):
         res = storage.get_class_media(params['ref'], params['class'], params['with'], params['without'], params['order'], params['offset'], params['limit'])
         return res
 
     def _action_search_media(self, storage, params):
-        res = storage.get_alike_media(params['ref'], params['class'], params['with'], params['without'], params['order'], params['offset'], params['limit'])
+        res = storage.get_alike_media(params['ref'], params['class'], params['with'], params['without'], params['threshold'], params['order'], params['offset'], params['limit'])
         return res
+
+    def _action_drop_provider_archive(self, media_storage, force_mode, pass_mode):
+        pass
 
     def _action_insert_media_hash(self, media_storage, media_fields, pass_mode):
 
@@ -364,13 +379,28 @@ class MediaSearch(object):
     def _answer_on_wrong(self, status=404, message=''):
         return (json.dumps({'_message': message}), status, {'Content-Type': 'application/json'})
 
-    def _answer_on_items(self, status=200, links=None, items=None):
+    def _answer_on_items(self, status=200, meta=None, items=None):
         if not items:
             items = []
-        if not links:
-            links = []
+        if not meta:
+            meta = {}
+        if not 'total' in meta:
+            meta['total'] = len(items)
         output = {
-            '_links': links,
+            '_meta': meta,
+            '_items': items
+        }
+
+        dt_handler = lambda obj: obj.isoformat() if isinstance(obj, datetime.datetime) or isinstance(obj, datetime.date) else json.JSONEncoder().default(obj)
+        return (json.dumps(output, default=dt_handler), status, {'Content-Type': 'application/json'})
+
+    def _answer_on_action(self, status=200, meta=None, items=None):
+        if not items:
+            items = []
+        if not meta:
+            meta = {}
+        output = {
+            '_meta': meta,
             '_items': items
         }
 
@@ -393,25 +423,30 @@ class MediaSearch(object):
                     logging.warning('POST request: bad ref parameter')
                     return self._answer_on_wrong(404, 'ref has to be a-zA-Z_-')
 
-        links = [{'_base': self._out_get_base_path(entry, provider, archive)}]
+        meta = {'base': self._out_get_base_path(entry, provider, archive)}
 
         if action is None:
             # do basic lists
 
+            basic_keys = ['offset', 'limit']
+            params_use = {}
+            for one_key in basic_keys:
+                params_use[one_key] = params[one_key]
+
             if entry is None:
-                res = self._action_list_entries(storage)
+                res = self._action_list_entries(storage, params_use)
             else:
                 if MEDIA_ENTRY_NAME != entry:
                     logging.warning('GET request: unknown entry')
                     return self._answer_on_wrong(404, 'unknown entry')
 
                 if provider is None:
-                    res = self._action_list_providers(storage, entry)
+                    res = self._action_list_providers(storage, entry, params_use)
                 else:
                     if archive is None:
-                        res = self._action_list_archives(storage, entry, provider)
+                        res = self._action_list_archives(storage, entry, provider, params_use)
                     else:
-                        res = self._action_list_actions(storage, entry, provider, archive)
+                        res = self._action_list_actions(storage, entry, provider, archive, params_use)
 
         else:
 
@@ -429,7 +464,8 @@ class MediaSearch(object):
             if not storage.is_correct():
                 return self._answer_on_wrong(500)
 
-            search_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
+            select_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
+            search_keys = ['ref', 'class', 'with', 'without', 'threshold', 'order', 'offset', 'limit']
 
             if action in ['_select']:
                 if (not params['ref']) and (not params['class']):
@@ -439,7 +475,6 @@ class MediaSearch(object):
                 res = []
                 if storage.storage_set():
                     params_use = {}
-                    select_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
                     for one_key in select_keys:
                         params_use[one_key] = params[one_key]
                     res = self._action_select_media(storage, params_use)
@@ -452,7 +487,6 @@ class MediaSearch(object):
                 res = []
                 if storage.storage_set():
                     params_use = {}
-                    search_keys = ['ref', 'class', 'with', 'without', 'order', 'offset', 'limit']
                     for one_key in search_keys:
                         params_use[one_key] = params[one_key]
                     res = self._action_search_media(storage, params_use)
@@ -460,9 +494,13 @@ class MediaSearch(object):
         if res is None:
             return self._answer_on_wrong(404)
         else:
-            return self._answer_on_items(200, links, res)
+            if 'total' in res:
+                meta['total'] = res['total']
+            if 'items' in res:
+                res = res['items']
+            return self._answer_on_items(200, meta, res)
 
-    def do_post(self, storage, entry, provider, archive, action, media, tags_mode, pass_mode):
+    def do_post(self, storage, entry, provider, archive, action, media, tags_mode, pass_mode, force_mode):
         # ref: reference, id string from client media archive, possibly concatenated with archive id, etc.
         # url: local or remote path, like file:///tmp/image.png or http://some.domain.tld/dir/image.jpg
         # mime: image/png, image/jpeg, image/pjpeg, image/gif, image/bmp, image/x-ms-bmp, image/tiff
@@ -478,34 +516,45 @@ class MediaSearch(object):
             logging.warning('POST request: provider and archive have to be specified')
             return self._answer_on_wrong(404, 'provider and archive have to be specified')
 
-        if not action in ['_insert', '_update', '_delete']:
+        if not action in [None, '_drop', '_insert', '_update', '_delete']:
             logging.warning('POST request: unknown action')
             return self._answer_on_wrong(404, 'unknown action')
 
         # to only force the storage creation on _insert
         # end immediately if storage is not set
         to_force_storage = False
-        if action == '_insert':
+        storage_necessary = [None, '_insert']
+        if action in storage_necessary:
             to_force_storage = True
 
         storage.set_storage(provider, archive, to_force_storage)
         if not storage.is_correct():
             return self._answer_on_wrong(500)
 
-        links = [{'_base': self._out_get_base_path(entry, provider, archive)}]
+        meta = {'base': self._out_get_base_path(entry, provider, archive)}
 
         if not storage.storage_set():
-            if pass_mode:
-                return self._answer_on_items(200, links, [])
-            else:
+            if action in storage_necessary:
                 return self._answer_on_wrong(404)
+            else:
+                if pass_mode:
+                    return self._answer_on_action(200, meta, [])
+                else:
+                    return self._answer_on_wrong(404)
 
         res = None
 
-        if ('ref' in media) and media['ref']:
-            if not ALLOWED_SPEC.match(str(media['ref'])):
-                logging.warning('POST request: bad ref parameter')
-                return self._answer_on_wrong(404, 'ref has to be a-zA-Z_-')
+        if action in ['_insert', '_update', '_delete']:
+            if ('ref' in media) and media['ref']:
+                if not ALLOWED_SPEC.match(str(media['ref'])):
+                    logging.warning('POST request: bad ref parameter')
+                    return self._answer_on_wrong(404, 'ref has to be a-zA-Z_-')
+
+        if action in [None]:
+            res = []
+
+        if action in ['_drop']:
+            res = self._action_drop_provider_archive(storage, force_mode, pass_mode)
 
         if action in ['_insert']:
             media_use = {'tags': media['tags']}
@@ -552,4 +601,4 @@ class MediaSearch(object):
         if res is None:
             return self._answer_on_wrong(404)
         else:
-            return self._answer_on_items(200, links, res)
+            return self._answer_on_action(200, meta, res)

@@ -1,0 +1,1 @@
+Directory for logs of the Python-based daemons of the Mediasearch system.

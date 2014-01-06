@@ -1,0 +1,8 @@
+Copy or link here the mediasearch lib directory, it should be:
+
+mediasearch/
+mediasearch/algs/
+mediasearch/app/
+mediasearch/plugin/
+mediasearch/__init__.py
+

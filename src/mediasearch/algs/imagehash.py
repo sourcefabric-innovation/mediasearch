@@ -66,26 +66,41 @@ Difference Hash computation.
 following http://www.hackerfactor.com/blog/index.php?/archives/529-Kind-of-Like-That.html
 @image must be a PIL instance.
 """
-def dhash(image, hash_size=16):
-    image = image.convert("L").resize((hash_size + 1, hash_size), Image.ANTIALIAS)
-    pixels = numpy.array(image.getdata(), dtype=numpy.float).reshape((hash_size + 1, hash_size))
-    # compute differences
-    diff = pixels[1:,:] > pixels[:-1,:]
-    return ImageHash(diff)
+def dhash(image, hash_size=8):
+    if type(hash_size) is not int:
+        return None
+    if hash_size < 2:
+        return None
+    try:
+        image = image.convert("L").resize((hash_size + 1, hash_size), Image.ANTIALIAS)
+        pixels = numpy.array(image.getdata(), dtype=numpy.float).reshape((hash_size + 1, hash_size))
+        diff = pixels[1:,:] > pixels[:-1,:]
+        # compute differences
+        return ImageHash(diff)
+    except:
+        return None
 
 """
 Perceptual Hash computation.
 Implementation follows http://www.hackerfactor.com/blog/index.php?/archives/432-Looks-Like-It.html
 @image must be a PIL instance.
 """
-def phash(image, hash_size=16):
-    image = image.convert("L").resize((hash_size, hash_size), Image.ANTIALIAS)
-    pixels = numpy.array(image.getdata(), dtype=numpy.float).reshape((hash_size, hash_size))
-    dct = scipy.fftpack.dct(pixels)
-    dctlowfreq = dct[:8, 1:9]
-    avg = dctlowfreq.mean()
-    diff = dctlowfreq > avg
-    return ImageHash(diff)
+def phash(image, hash_size=8):
+    if type(hash_size) is not int:
+        return None
+    if hash_size < 2:
+        return None
+    double_size = 2 * hash_size
+    try:
+        image = image.convert("L").resize((double_size, double_size), Image.ANTIALIAS)
+        pixels = numpy.array(image.getdata(), dtype=numpy.float).reshape((double_size, double_size))
+        dct = scipy.fftpack.dct(pixels)
+        dctlowfreq = dct[:hash_size, 1:(1+hash_size)]
+        avg = dctlowfreq.mean()
+        diff = dctlowfreq > avg
+        return ImageHash(diff)
+    except:
+        return None
 
 __dir__ = [dhash, phash, ImageHash]
 

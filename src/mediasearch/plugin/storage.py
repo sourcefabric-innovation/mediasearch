@@ -47,6 +47,7 @@ class HashStorage(object):
         self.storage = storage
         self.correct = bool(self.storage)
         self.loaded_hashes = None
+        self.collection_rank = -1
         self.collection_name = ''
         self.collection_set = False
 
@@ -87,6 +88,7 @@ class HashStorage(object):
             return False
 
         # this is a simple way, lacking atomicity
+        self.collection_rank = -1
         self.collection_name = ''
         self.collection_set = False
         rank = None
@@ -95,7 +97,7 @@ class HashStorage(object):
             collection = self.storage.db[COLLECTION_GENERAL]
             doc = collection.find_one({PROVIDER_FIELD: provider, ARCHIVE_FIELD: archive})
             if doc:
-                rank = str(doc['_id'])
+                rank = int(doc['_id'])
         except:
             self.correct = False
             return False
@@ -109,10 +111,10 @@ class HashStorage(object):
                     collection = self.storage.db[COLLECTION_GENERAL]
                     cursor = collection.find().sort([('_id', -1)]).limit(1)
                     if not cursor.count():
-                        rank = '1'
+                        rank = 1
                     else:
                         doc = cursor.next()
-                        rank = str(int(doc['_id']) + 1)
+                        rank = int(doc['_id']) + 1
                     timepoint = datetime.datetime.utcnow()
                     collection.save({'_id': rank, PROVIDER_FIELD: provider, ARCHIVE_FIELD: archive, CREATED_FIELD: timepoint, UPDATED_FIELD: timepoint})
                     self.collection_set = True
@@ -122,7 +124,41 @@ class HashStorage(object):
                     return False
 
         if self.collection_set:
-            self.collection_name = COLLECTION_PARTICULAR.format(rank=rank)
+            self.collection_rank = rank
+            self.collection_name = COLLECTION_PARTICULAR.format(rank=str(rank))
+
+        return True
+
+    def drop_provider_archive(self, force):
+        if not self.correct:
+            return False
+        if not self.collection_name:
+            return False
+
+        try:
+            collection = self.storage.db[self.collection_name]
+            count = collection.find().count()
+        except:
+            self.correct = False
+            return False
+
+        if count and (not force):
+            return False
+
+        try:
+            collection.drop()
+        except:
+            self.correct = False
+            return False
+
+        try:
+            collection = self.storage.db[COLLECTION_GENERAL]
+            cursor = collection.remove({'_id': self.collection_rank})
+            self.collection_rank = -1
+            self.collection_name = ''
+        except:
+            self.correct = False
+            return False
 
         return True
 
@@ -272,20 +308,25 @@ class HashStorage(object):
 
         return order_list
 
-    def get_alike_media(self, ref_ids, media_class=None, tags_with=None, tags_without=None, order=None, offset=None, limit=None):
+    def get_alike_media(self, ref_ids, media_class=None, tags_with=None, tags_without=None, threshold=None, order=None, offset=None, limit=None):
+        total = 0
+        no_res = {'items': [], 'total': 0}
+
         if not self.correct:
-            return []
+            return no_res
 
         if not self.collection_set:
-            return []
+            return no_res
 
         search_struct = self._prepare_ref_ids(ref_ids)
         if not search_struct:
-            return []
+            return no_res
 
         test_refs = []
         test_evals = {}
         try:
+            if threshold:
+                threshold = float(threshold)
             db_collection = self.storage.db[self.collection_name]
             cursor = db_collection.find(search_struct)
             for entry in cursor:
@@ -298,25 +339,33 @@ class HashStorage(object):
                     if ('ref' not in one_alike) or (not one_alike['ref']):
                         continue
                     cur_ref = one_alike['ref']
-                    if cur_ref not in test_refs:
-                        test_refs.append(cur_ref)
-                    if cur_ref not in test_evals:
-                        test_evals[cur_ref] = []
                     cur_evals = []
                     if ('evals' in one_alike) and (one_alike['evals']):
                         cur_evals = one_alike['evals']
                     if type(cur_evals) is not list:
                         cur_evals = [cur_evals]
+                    use_evals = []
                     for one_eval in cur_evals:
                         if not one_eval:
                             continue
-                        test_evals[cur_ref].append(one_eval)
+                        if threshold:
+                            if 'dist' not in one_eval:
+                                continue
+                            if threshold < float(one_eval['dist']):
+                                continue
+                        use_evals.append(one_eval)
+                    if not use_evals:
+                        continue
+                    if cur_ref not in test_refs:
+                        test_refs.append(cur_ref)
+                    if cur_ref not in test_evals:
+                        test_evals[cur_ref] = use_evals
         except:
             self.correct = False
-            return []
+            return no_res
 
         if not test_refs:
-            return []
+            return no_res
 
         search_parts = []
         if 1 == len(test_refs):
@@ -363,10 +412,10 @@ class HashStorage(object):
                 take_alikes[entry['_id']] = cur_take
         except:
             self.correct = False
-            return []
+            return no_res
 
         if not take_refs:
-            return []
+            return no_res
 
         sort_values = {}
         eval_values = {}
@@ -398,6 +447,7 @@ class HashStorage(object):
         del(test_evals)
 
         take_refs.sort(key=lambda ref: sort_values[ref])
+        total = len(take_refs)
 
         if offset is not None:
             take_refs = take_refs[offset:]
@@ -422,14 +472,16 @@ class HashStorage(object):
                 cur_item[one_part] = cur_entry[one_part]
             output.append(cur_item)
 
-        return output
+        return {'items': output, 'total': total}
 
     def get_class_media(self, ref_ids=None, media_class=None, tags_with=None, tags_without=None, order=None, offset=None, limit=None):
+        total = 0
+        no_res = {'items': [], 'total': 0}
         if not self.correct:
-            return []
+            return no_res
 
         if not self.collection_set:
-            return []
+            return no_res
 
         search_parts = []
 
@@ -441,7 +493,7 @@ class HashStorage(object):
             search_parts.append({'class': media_class})
 
         if not search_parts:
-            return []
+            return no_res
 
         take_with = self._prepare_tags_with(tags_with)
         if take_with:
@@ -464,6 +516,7 @@ class HashStorage(object):
         try:
             db_collection = self.storage.db[self.collection_name]
             cursor = db_collection.find(search_struct).sort(order_list)
+            total = cursor.count()
             if offset is not None:
                 cursor = cursor.skip(offset)
             if limit is not None:
@@ -484,18 +537,15 @@ class HashStorage(object):
 
         except:
             self.correct = False
-            return []
+            return no_res
 
-        return output
+        return {'items': output, 'total': total}
 
     def load_class_hashes(self, media_class):
         if not self.correct:
             return False
 
         self.loaded_hashes = None
-        if not self.collection_name:
-            return False
-
         if not self.collection_name:
             return False
 
