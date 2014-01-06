@@ -602,7 +602,7 @@ class HashStorage(object):
         rv = {'ref': entry_id, 'hashes': entry['hashes']}
         return rv
 
-    def save_new_media(self, store_fields, pass_mode):
+    def save_new_media(self, store_fields, pass_mode, event_time=None):
         if not self.correct:
             return None
         if not self.collection_name:
@@ -643,7 +643,10 @@ class HashStorage(object):
                     part_data = [part_data]
                 save_data[part] = part_data
 
-        timepoint = datetime.datetime.utcnow()
+        if type(event_time) is datetime.datetime:
+            timepoint = event_time
+        else:
+            timepoint = datetime.datetime.utcnow()
 
         save_data[CREATED_FIELD] = timepoint
         save_data[UPDATED_FIELD] = timepoint
@@ -658,7 +661,7 @@ class HashStorage(object):
 
         return id_value
 
-    def append_alike_media(self, id_value, alike_item):
+    def append_alike_media(self, id_value, alike_item, event_time=None):
         # http://docs.mongodb.org/manual/tutorial/modify-documents/
         # http://docs.mongodb.org/manual/reference/operator/update/
 
@@ -669,7 +672,10 @@ class HashStorage(object):
         if not alike_item:
             return False
 
-        timepoint = datetime.datetime.utcnow()
+        if type(event_time) is datetime.datetime:
+            timepoint = event_time
+        else:
+            timepoint = datetime.datetime.utcnow()
 
         try:
             collection = self.storage.db[self.collection_name]
@@ -680,7 +686,7 @@ class HashStorage(object):
 
         return True
 
-    def set_media_tags(self, id_value, tags, set_mode, pass_mode):
+    def set_media_tags(self, id_value, tags, set_mode, pass_mode, event_time=None):
 
         if not self.correct:
             return False
@@ -706,7 +712,10 @@ class HashStorage(object):
             if one_tag and (one_tag not in tag_seq):
                 tag_seq.append(one_tag)
 
-        timepoint = datetime.datetime.utcnow()
+        if type(event_time) is datetime.datetime:
+            timepoint = event_time
+        else:
+            timepoint = datetime.datetime.utcnow()
 
         if set_mode == 'set':
             try:
@@ -746,7 +755,7 @@ class HashStorage(object):
 
         return True
 
-    def excise_alike_media(self, id_value, id_alike, pass_mode):
+    def excise_alike_media(self, id_value, id_alike, pass_mode, event_time=None):
 
         if not self.correct:
             return False
@@ -766,7 +775,10 @@ class HashStorage(object):
                 return False
         excise_spec = 'this.ref == "' + id_alike + '"'
 
-        timepoint = datetime.datetime.utcnow()
+        if type(event_time) is datetime.datetime:
+            timepoint = event_time
+        else:
+            timepoint = datetime.datetime.utcnow()
 
         try:
             collection = self.storage.db[self.collection_name]

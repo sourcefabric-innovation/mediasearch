@@ -116,9 +116,10 @@ class MediaSearch(object):
         if not rv:
             return False
 
+        timepoint = datetime.datetime.utcnow()
         if media_data['alike']:
             for one_link in media_data['alike']:
-                rv = media_storage.excise_alike_media(one_link['ref'], media_data['ref'], True)
+                rv = media_storage.excise_alike_media(one_link['ref'], media_data['ref'], True, timepoint)
                 if not rv:
                     return False
 
@@ -343,12 +344,13 @@ class MediaSearch(object):
             similar = []
         store_fields['alike'] = similar
 
-        media_ref = media_storage.save_new_media(store_fields, pass_mode)
+        timepoint = datetime.datetime.utcnow()
+        media_ref = media_storage.save_new_media(store_fields, pass_mode, timepoint)
         if media_ref is None:
             return False
 
         for similar_item in similar:
-            media_storage.append_alike_media(similar_item['ref'], {'ref': media_ref, 'evals': similar_item['evals']})
+            media_storage.append_alike_media(similar_item['ref'], {'ref': media_ref, 'evals': similar_item['evals']}, timepoint)
 
         return [{'ref': media_ref}]
 
