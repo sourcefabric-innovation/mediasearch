@@ -175,6 +175,7 @@ def mediasearch_get(entry, provider, archive, action):
         logging.error('GET request: uncaught exception')
         return (json.dumps({'_message': 'internal server error'}), 500, {'Content-Type': 'application/json'})
 
+@mediasearch_plugin.route('/<entry>/<provider>/<archive>/', defaults={'action': None}, methods=['POST'], strict_slashes=False)
 @mediasearch_plugin.route('/<entry>/<provider>/<archive>/<action>/', defaults={}, methods=['POST'], strict_slashes=False)
 def mediasearch_post(entry, provider, archive, action):
     '''
