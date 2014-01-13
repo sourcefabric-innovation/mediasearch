@@ -3,6 +3,7 @@
 MEDIASEARCH_DBNAME = 'mediasearch'
 MEDIASEARCH_HOST = 'localhost'
 MEDIASEARCH_PORT = 9020
+MEDIASEARCH_LOCK = '/tmp/_mediasearch_lock'
 MEDIASEARCH_DEBUG = True
 
 import os, sys, datetime, json, logging
@@ -12,5 +13,5 @@ except:
     logging.error('Mediasearch library is not installed')
     os._exit(1)
 
-run_flask(MEDIASEARCH_DBNAME, MEDIASEARCH_HOST, MEDIASEARCH_PORT, MEDIASEARCH_DEBUG)
+run_flask(MEDIASEARCH_DBNAME, MEDIASEARCH_HOST, MEDIASEARCH_PORT, MEDIASEARCH_LOCK, MEDIASEARCH_DEBUG)
 

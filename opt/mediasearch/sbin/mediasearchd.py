@@ -20,6 +20,7 @@ TO_DAEMONIZE = False
 
 PID_PATH = ''
 LOG_PATH = ''
+LOCK_PATH = ''
 
 HOME_DIR = '/tmp'
 LOG_SERVER_NAME = 'mediasearchd'
@@ -39,6 +40,7 @@ parser.add_argument('-d', '--daemonize', help='daemonize the server', action='st
 
 parser.add_argument('-i', '--pid_path', help='pid file path')
 parser.add_argument('-l', '--log_path', help='log file path')
+parser.add_argument('-k', '--lock_path', help='lock file path')
 
 parser.add_argument('-s', '--install_dir', help='installation directory', default='/opt/mediasearch/')
 
@@ -67,6 +69,8 @@ if args.pid_path:
     PID_PATH = args.pid_path
 if args.log_path:
     LOG_PATH = args.log_path
+if args.lock_path:
+    LOCK_PATH = args.lock_path
 
 install_dir = '/'
 if args.install_dir:
@@ -80,6 +84,8 @@ if TO_DAEMONIZE:
         PID_PATH = install_dir + 'var/run/mediasearchd.pid'
     if not LOG_PATH:
         LOG_PATH = install_dir + 'var/log/mediasearchd.log'
+    if not LOCK_PATH:
+        LOCK_PATH = install_dir + 'var/run/mediasearchd.lock'
 
 def daemonize(work_dir, pid_path):
     UMASK = 022
@@ -190,12 +196,12 @@ def exit_handler(signum, frame):
 
     cleanup()
 
-def run_server(dbname, web_address, web_port, to_debug):
+def run_server(dbname, web_address, web_port, lock_file, to_debug):
 
     logging.info('starting the ' + LOG_SERVER_NAME + ' web server')
 
     from mediasearch.app.run import run_flask
-    run_flask(dbname, web_address, web_port, to_debug)
+    run_flask(dbname, web_address, web_port, lock_file, to_debug)
 
 if __name__ == "__main__":
     atexit.register(cleanup)
@@ -232,7 +238,7 @@ if __name__ == "__main__":
             sys.path.insert(0, imp_dir)
 
     try:
-        run_server(MEDIASEARCH_DBNAME, WEB_ADDRESS, WEB_PORT, MEDIASEARCH_DEBUG)
+        run_server(MEDIASEARCH_DBNAME, WEB_ADDRESS, WEB_PORT, LOCK_PATH, MEDIASEARCH_DEBUG)
     except Exception as exc:
         logging.error('can not start the ' + LOG_SERVER_NAME + ' web server: ' + str(exc))
         sys.exit(1)

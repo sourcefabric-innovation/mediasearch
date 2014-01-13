@@ -17,6 +17,7 @@
 
 DAEMON=/opt/mediasearch/sbin/mediasearchd.py
 PIDFILE=/opt/mediasearch/var/run/mediasearchd.pid
+LOCKFILE=/opt/mediasearch/var/run/mediasearchd.lock
 LOGFILE=/opt/mediasearch/var/log/mediasearchd.log
 INSTDIR=/opt/mediasearch
 WEBPORT=9020
@@ -27,11 +28,14 @@ test -x $DAEMON || exit 0
 
 case "$1" in
   start)
+    touch $LOCKFILE
+    chown www-data.www-data $LOCKFILE
+
     log_daemon_msg "Starting Mediasearch daemon"
     log_progress_msg "mediasearch"
 
     start-stop-daemon --start --quiet --pidfile $PIDFILE --startas $DAEMON -- \
-        -n $DBNAME -a $WEBHOST -p $WEBPORT -i $PIDFILE -l $LOGFILE -s $INSTDIR -d -v || true
+        -n $DBNAME -a $WEBHOST -p $WEBPORT -i $PIDFILE -l $LOGFILE -k $LOCKFILE -s $INSTDIR -d -v || true
 
     log_end_msg 0
     ;;

@@ -8,6 +8,7 @@ import sys, os, logging, datetime
 import json, tempfile, urllib2
 import re, operator
 from mediasearch.algs.methods import MediaHashMethods
+from mediasearch.utils.sync import synchronizer
 
 try:
     unicode()
@@ -171,16 +172,19 @@ class MediaSearch(object):
 
         return media_hash
 
-    def _proc_compare_media_hash(self, media_storage, media_class, cmp_hash):
+    def _proc_compare_media_hash(self, media_storage, media_ref, media_class, cmp_hash, timepoint):
         found_similar = []
 
-        media_storage.load_class_hashes(media_class)
+        media_storage.load_class_hashes(media_class, timepoint)
         while True:
             oth_hash = media_storage.get_loaded_hash()
             if oth_hash is None:
                 break
 
-            oth_hash_id = oth_hash['ref']
+            oth_hash_ref = oth_hash['ref']
+            if oth_hash_ref == media_ref:
+                continue
+
             oth_hash_evals = {}
             for oth_hash_part in oth_hash['hashes']:
                 oth_hash_key = str(oth_hash_part['method']) + '-' + str(oth_hash_part['dim'])
@@ -199,7 +203,7 @@ class MediaSearch(object):
                         continue
                     cur_diffs.append({'method': cmp_hash_part['method'], 'dim': cmp_hash_part['dim'], 'diff': str(cur_compared['diff']), 'dist': cur_compared['dist']})
             if cur_diffs:
-                found_similar.append({'ref': oth_hash_id, 'evals': cur_diffs})
+                found_similar.append({'ref': oth_hash_ref, 'evals': cur_diffs})
 
         return found_similar
 
@@ -338,19 +342,30 @@ class MediaSearch(object):
         for one_hash in hashes['evals']:
             store_hashes.append({'method': one_hash['method'], 'dim': one_hash['dim'], 'repr': one_hash['repr']})
         store_fields['hashes'] = store_hashes
+        store_fields['alike'] = []
 
-        similar = self._proc_compare_media_hash(media_storage, hashes['class'], hashes['evals'])
-        if not similar:
-            similar = []
-        store_fields['alike'] = similar
+        synchronizer.lock()
 
         timepoint = datetime.datetime.utcnow()
-        media_ref = media_storage.save_new_media(store_fields, pass_mode, timepoint)
+        try:
+            media_ref = media_storage.save_new_media(store_fields, pass_mode, timepoint)
+        except:
+            media_ref = None
+
+        synchronizer.unlock()
+
         if media_ref is None:
             return False
 
-        for similar_item in similar:
-            media_storage.append_alike_media(similar_item['ref'], {'ref': media_ref, 'evals': similar_item['evals']}, timepoint)
+        similar = self._proc_compare_media_hash(media_storage, media_ref, hashes['class'], hashes['evals'], timepoint)
+        if not similar:
+            similar = []
+
+        if similar:
+            timepoint = datetime.datetime.utcnow()
+            media_storage.append_alike_media(media_ref, similar, timepoint)
+            for similar_item in similar:
+                media_storage.append_alike_media(similar_item['ref'], {'ref': media_ref, 'evals': similar_item['evals']}, timepoint)
 
         return [{'ref': media_ref}]
 

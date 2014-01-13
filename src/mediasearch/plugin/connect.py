@@ -63,7 +63,7 @@ try:
 except:
     logging.error('Flask framework is not installed')
     os._exit(1)
-from mediasearch.app.dbs import mongo_dbs
+from mediasearch.utils.dbs import mongo_dbs
 from mediasearch.plugin.process import MediaSearch
 from mediasearch.plugin.storage import HashStorage
 

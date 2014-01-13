@@ -4,6 +4,7 @@
 #
 
 import os, sys, datetime, json, logging
+import atexit
 try:
     from flask import Flask
     from flask import request, Blueprint
@@ -15,15 +16,19 @@ try:
 except:
     logging.error('Mongo support is not installed')
     os._exit(1)
-from mediasearch.app.dbs import mongo_dbs
+from mediasearch.utils.dbs import mongo_dbs
+from mediasearch.utils.sync import synchronizer, sync_clean
 from mediasearch.plugin.connect import mediasearch_plugin
 
 app = Flask(__name__)
 
-def setup_mediasearch(dbname):
+def setup_mediasearch(dbname, lockfile):
     mongo_dbs.set_dbname(dbname)
     app.config['MONGO_MEDIASEARCH_DBNAME'] = mongo_dbs.get_dbname()
     mongo_dbs.set_db(PyMongo(app, config_prefix='MONGO_MEDIASEARCH'))
+
+    synchronizer.prepare(lockfile)
+    atexit.register(sync_clean)
 
     app.register_blueprint(mediasearch_plugin)
 
@@ -41,10 +46,10 @@ def page_not_found(error):
 
     return (json.dumps({'_message': 'page not found'}), 404, {'Content-Type': 'application/json'})
 
-def run_flask(dbname, host='localhost', port=9020, debug=False):
-    setup_mediasearch(dbname)
+def run_flask(dbname, host='localhost', port=9020, lockfile='', debug=False):
+    setup_mediasearch(dbname, lockfile)
     app.run(host=host, port=port, debug=debug)
 
 if __name__ == '__main__':
-    app.run('mediasearch', host='localhost', port=9020, debug=True)
+    run_flask('mediasearch', host='localhost', port=9020, lockfile='', debug=True)
 

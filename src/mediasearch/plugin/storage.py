@@ -541,7 +541,7 @@ class HashStorage(object):
 
         return {'items': output, 'total': total}
 
-    def load_class_hashes(self, media_class):
+    def load_class_hashes(self, media_class, upto_timepoint=None):
         if not self.correct:
             return False
 
@@ -549,9 +549,13 @@ class HashStorage(object):
         if not self.collection_name:
             return False
 
+        load_spec = {'class': media_class}
+        if type(upto_timepoint) == datetime.datetime:
+            load_spec[CREATED_FIELD] = {'$lte': upto_timepoint}
+
         try:
             collection = self.storage.db[self.collection_name]
-            self.loaded_hashes = collection.find({'class': media_class})
+            self.loaded_hashes = collection.find(load_spec)
         except:
             self.correct = False
             self.loaded_hashes = None
@@ -661,7 +665,7 @@ class HashStorage(object):
 
         return id_value
 
-    def append_alike_media(self, id_value, alike_item, event_time=None):
+    def append_alike_media(self, id_value, alike_part, event_time=None):
         # http://docs.mongodb.org/manual/tutorial/modify-documents/
         # http://docs.mongodb.org/manual/reference/operator/update/
 
@@ -669,17 +673,28 @@ class HashStorage(object):
             return False
         if not self.collection_name:
             return False
-        if not alike_item:
-            return False
+        if not alike_part:
+            return True
 
         if type(event_time) is datetime.datetime:
             timepoint = event_time
         else:
             timepoint = datetime.datetime.utcnow()
 
+        push_form = '$push'
+        if type(alike_part) == list:
+            if True:
+                # for older/current mongodb, we have to use:
+                # {'$pushAll': {'alike': [...]}
+                push_form = '$pushAll'
+            else:
+                # for newer (than my install), we have to use:
+                # {'$push': {'alike': {'$each'; [...]}}
+                alike_part = {'$each': alike_part}
+
         try:
             collection = self.storage.db[self.collection_name]
-            collection.update({'_id': id_value}, {'$push': {'alike': alike_item}, '$set': {RELIKED_FIELD: timepoint}}, upsert=False)
+            collection.update({'_id': id_value}, {push_form: {'alike': alike_part}, '$set': {RELIKED_FIELD: timepoint}}, upsert=False)
         except:
             # it may fail if the updated media was removed meanwhile, thus not setting the correct flag here
             return False
