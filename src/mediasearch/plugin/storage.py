@@ -14,13 +14,14 @@ storage data: collection "storages"
     provider: String(a-zA-Z0-9_-) <= provider_name,
     archive: String(a-zA-Z0-9_-) <= archive_name,
     created_on: Datetime, sets on creation,
-    updated_on: Datetime, sets on changes
+    updated_on: Datetime, sets on changes,
+    limit_count: Integer, limiting the sets for similarity comparison
 }
 
 media data: collections "storage_%N"
 {
     _id: String(a-zA-Z0-9_-) <= reference:unique index,
-    class: String(image|video|audio) <= media_class, taken from mime,
+    feed: String(default|tweets|...)
     hashes: [{method: String(dhash|phash|...), dim: Integer(8|16|32|64), repr: String(0x0-f)}],
     alike: [{ref: String<=_id, evals:[{method: String(dhash|phash|...), dim: Integer(8|16|32|64), diff: Number, dist: Number}]}],
     tags: [String(a-zA-Z0-9_-)],
@@ -40,16 +41,23 @@ ARCHIVE_FIELD = 'archive'
 CREATED_FIELD = 'created_on'
 UPDATED_FIELD = 'updated_on'
 RELIKED_FIELD = 'reliked_on'
+FEED_FIELD = 'feed'
+LIMIT_COUNT_FIELD = 'limit_count'
+DEFAULT_LIMIT_COUNT = 1000
+MIN_LIMIT_COUNT = 100
 
 class HashStorage(object):
 
     def __init__(self, storage=None):
         self.storage = storage
+        self.provider = ''
+        self.archive = ''
         self.correct = bool(self.storage)
         self.loaded_hashes = None
         self.collection_rank = -1
         self.collection_name = ''
         self.collection_set = False
+        self.limit_count = DEFAULT_LIMIT_COUNT
 
     def is_correct(self):
         return self.correct
@@ -88,9 +96,12 @@ class HashStorage(object):
             return False
 
         # this is a simple way, lacking atomicity
+        self.provider = provider
+        self.archive = archive
         self.collection_rank = -1
         self.collection_name = ''
         self.collection_set = False
+        self.limit_count = DEFAULT_LIMIT_COUNT
         rank = None
 
         try:
@@ -98,6 +109,12 @@ class HashStorage(object):
             doc = collection.find_one({PROVIDER_FIELD: provider, ARCHIVE_FIELD: archive})
             if doc:
                 rank = int(doc['_id'])
+                if LIMIT_COUNT_FIELD in doc:
+                    limit_count = int(doc[LIMIT_COUNT_FIELD])
+                    if limit_count:
+                        if limit_count < MIN_LIMIT_COUNT:
+                            limit_count = MIN_LIMIT_COUNT
+                        self.limit_count = limit_count
         except:
             self.correct = False
             return False
@@ -128,6 +145,24 @@ class HashStorage(object):
             self.collection_name = COLLECTION_PARTICULAR.format(rank=str(rank))
 
         return True
+
+    def set_limit(self, limit):
+        if not self.correct:
+            return False
+        if not self.collection_name:
+            return False
+
+        timepoint = datetime.datetime.utcnow()
+        sel_spec = {PROVIDER_FIELD: self.provider, ARCHIVE_FIELD: self.archive}
+        upd_spec = {LIMIT_COUNT_FIELD: limit, UPDATED_FIELD: timepoint}
+
+        try:
+            collection = self.storage.db[COLLECTION_GENERAL]
+            collection.update(sel_spec, {'$set': upd_spec}, upsert=False)
+        except:
+            self.correct = False
+            self.collection_set = False
+            return False
 
     def drop_provider_archive(self, force):
         if not self.correct:
@@ -308,7 +343,7 @@ class HashStorage(object):
 
         return order_list
 
-    def get_alike_media(self, ref_ids, media_class=None, tags_with=None, tags_without=None, threshold=None, order=None, offset=None, limit=None):
+    def get_alike_media(self, ref_ids, media_feed=None, tags_with=None, tags_without=None, threshold=None, order=None, offset=None, limit=None):
         total = 0
         no_res = {'items': [], 'total': 0}
 
@@ -317,6 +352,18 @@ class HashStorage(object):
 
         if not self.collection_set:
             return no_res
+
+        if offset is not None:
+            try:
+                offset = int(offset)
+            except:
+                offset = None
+
+        if limit is not None:
+            try:
+                limit = int(limit)
+            except:
+                limit = None
 
         search_struct = self._prepare_ref_ids(ref_ids)
         if not search_struct:
@@ -373,8 +420,8 @@ class HashStorage(object):
         else:
             search_parts.append({'_id': {'$in': test_refs}})
 
-        if media_class:
-            search_parts.append({'class': media_class})
+        if media_feed:
+            search_parts.append({FEED_FIELD: media_feed})
 
         take_with = self._prepare_tags_with(tags_with)
         if take_with:
@@ -400,7 +447,9 @@ class HashStorage(object):
             for entry in cursor:
                 take_refs.append(entry['_id'])
                 cur_take = {}
-                cur_take['class'] = entry['class']
+                cur_take[FEED_FIELD] = None
+                if FEED_FIELD in entry:
+                    cur_take[FEED_FIELD] = entry[FEED_FIELD]
                 cur_tags = []
                 if ('tags' in entry) and entry['tags']:
                     cur_tags = entry['tags']
@@ -474,7 +523,7 @@ class HashStorage(object):
 
         return {'items': output, 'total': total}
 
-    def get_class_media(self, ref_ids=None, media_class=None, tags_with=None, tags_without=None, order=None, offset=None, limit=None):
+    def get_feed_media(self, ref_ids=None, media_feed=None, tags_with=None, tags_without=None, order=None, offset=None, limit=None):
         total = 0
         no_res = {'items': [], 'total': 0}
         if not self.correct:
@@ -483,14 +532,26 @@ class HashStorage(object):
         if not self.collection_set:
             return no_res
 
+        if offset is not None:
+            try:
+                offset = int(offset)
+            except:
+                offset = None
+
+        if limit is not None:
+            try:
+                limit = int(limit)
+            except:
+                limit = None
+
         search_parts = []
 
         ref_part = self._prepare_ref_ids(ref_ids)
         if ref_part:
             search_parts.append(ref_part)
 
-        if media_class:
-            search_parts.append({'class': media_class})
+        if media_feed:
+            search_parts.append({FEED_FIELD: media_feed})
 
         if not search_parts:
             return no_res
@@ -523,7 +584,9 @@ class HashStorage(object):
                 cursor = cursor.limit(limit)
 
             for entry in cursor:
-                cur_item = {'ref': entry['_id'], 'class': entry['class']}
+                cur_item = {'ref': entry['_id'], 'feed': None}
+                if FEED_FIELD in entry:
+                    cur_item[FEED_FIELD] = entry[FEED_FIELD]
                 cur_tags = []
                 if ('tags' in entry) and entry['tags']:
                     cur_tags = entry['tags']
@@ -541,7 +604,25 @@ class HashStorage(object):
 
         return {'items': output, 'total': total}
 
-    def load_class_hashes(self, media_class, upto_timepoint=None):
+    def get_feeds(self):
+        if not self.correct:
+            return False
+        if not self.collection_name:
+            return False
+
+        no_res = []
+        feeds = []
+
+        try:
+            db_collection = self.storage.db[self.collection_name]
+            feeds = db_collection.distinct(FEED_FIELD)
+        except:
+            self.correct = False
+            return no_res
+
+        return feeds
+
+    def load_feed_hashes(self, media_feed, upto_timepoint=None, limit_count=0):
         if not self.correct:
             return False
 
@@ -549,13 +630,17 @@ class HashStorage(object):
         if not self.collection_name:
             return False
 
-        load_spec = {'class': media_class}
+        limit_spec = self.limit_count + 1
+        if limit_count:
+            limit_spec = limit_count + 1
+
+        load_spec = {FEED_FIELD: media_feed}
         if type(upto_timepoint) == datetime.datetime:
             load_spec[CREATED_FIELD] = {'$lte': upto_timepoint}
 
         try:
             collection = self.storage.db[self.collection_name]
-            self.loaded_hashes = collection.find(load_spec)
+            self.loaded_hashes = collection.find(load_spec).limit(limit_spec)
         except:
             self.correct = False
             self.loaded_hashes = None
@@ -613,7 +698,7 @@ class HashStorage(object):
             return None
 
         save_take_id = 'ref'
-        save_take_string = ['class']
+        save_take_string = ['feed']
         save_take_list = ['hashes', 'alike', 'tags']
 
         id_value = store_fields[save_take_id]

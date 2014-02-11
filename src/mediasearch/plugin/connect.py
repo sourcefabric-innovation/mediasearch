@@ -23,15 +23,16 @@ http://localhost:9020/media/provider_name/archive_name/
 returns list of actions
 
 POST:
-http://localhost:9020/media/provider_name/archive_name/?pass=boolean
+http://localhost:9020/media/provider_name/archive_name/?pass=boolean&limit=integer
 http://localhost:9020/media/provider_name/archive_name/_drop?pass=boolean&force=boolean
 ... simple addition and removal of an archive
 
-http://localhost:9020/media/provider_name/archive_name/_action?pass=boolean&mode=tag_setting
+http://localhost:9020/media/provider_name/archive_name/_action?pass=boolean&mode=tag_setting&limit=integer
 _action: _insert, _update, _delete
-data: {ref,url,mime,tags} for _insert, {ref,tags} for _update, {ref} for _delete
+data: {ref,feed,url,mime,tags} for _insert, {ref,tags} for _update, {ref} for _delete
 {
     ref ... reference to client-wise media id, unique, mandatory,
+    feed ... for slicing the image sets (usually to high vs. low throughput feeds)
     url ... link to the media file, mandatory for _insert, not used otherwise,
     mime ... mime type, mandatory for _insert, not used otherwise,
     tags ... list of tags, _insert, _update only
@@ -40,15 +41,16 @@ pass: default false
 _insert: whether to overwrite, if ref already exists, otherwise error returned
 _update: whether to ignore non-existent ref, otherwise error returned
 _delete: whether to ignore non-existent ref, otherwise error returned
+limit: the count of images (per feed) to use to similarity comparisons
 
 GET:
 http://localhost:9020/media/provider_name/archive_name/_action?par1=val1&...
 _action: _select, _search
 parN:
 ref ... case for _search, mandatory for _search: listing similar items; several values used as similar to any of them
-ref ... case for _select (ref or class mandatory for _select)
-class ... case for _search: image / video / audio
-class ... case for _select(ref or class mandatory for _select): image / video / audio
+ref ... case for _select (ref or feed mandatory for _select)
+feed ... case for _search: image set slice
+feed ... case for _select(ref or feed mandatory for _select): image set slice
 with ... tags included, several parN means all necessary, use ","-joined values for inclusion if any tag present
 without ... tags excluded, several parN means all excluded, use ","-joined vlaues for exclusion if all tags present
 threshold ... distance limit, 0...1, _search only
@@ -69,13 +71,14 @@ from mediasearch.plugin.storage import HashStorage
 
 DATA_PARAM = 'data'
 PASS_PARAM = 'pass'
+LIMIT_PARAM = 'limit'
 FORCE_PARAM = 'force'
 BOOL_PARAM_TRUE = ['1', 't', 'T']
-GET_PARAM_SIMPLE = ['class', 'threshold', 'limit', 'offset']
+GET_PARAM_SIMPLE = ['feed', 'threshold', 'limit', 'offset']
 GET_PARAM_LIST = ['ref', 'order']
 GET_PARAM_LIST_DOUBLE = ['with', 'without']
 GET_PARAM_SPLIT = ','
-POST_PARAM_STRING = ['ref', 'url', 'mime']
+POST_PARAM_STRING = ['ref', 'feed', 'url', 'mime']
 POST_PARAM_LIST = ['tags']
 TAGS_MODE_PARAM = 'mode'
 GET_NAT_INTEGER = ['limit', 'offset']
@@ -129,6 +132,7 @@ def mediasearch_get(entry, provider, archive, action):
         if cur_par in request.args:
             cur_val_set = request.args.get(cur_par)
             if cur_val_set:
+                cur_val_set = _put_to_str(cur_val_set)
                 if cur_par in GET_NAT_INTEGER:
                     try:
                         cur_val_set = int(cur_val_set)
@@ -141,7 +145,7 @@ def mediasearch_get(entry, provider, archive, action):
                         cur_val_set = float(cur_val_set)
                     except:
                         cur_val_set = None
-                media_params[cur_par] = _put_to_str(cur_val_set)
+                media_params[cur_par] = cur_val_set
 
     for cur_par in GET_PARAM_LIST:
         media_params[cur_par] = None
@@ -207,6 +211,19 @@ def mediasearch_post(entry, provider, archive, action):
                     force_value = True
                     break
 
+    limit_value = None
+    if LIMIT_PARAM in request.args:
+        limit_value_got = _put_to_str(request.args[LIMIT_PARAM])
+        if limit_value_got:
+            try:
+                limit_value_got = int(limit_value_got)
+                if 0 > limit_value_got:
+                    limit_value_got = None
+            except:
+                limit_value_got = None
+        if limit_value_got:
+            limit_value = limit_value_got
+
     tags_mode = None
     if TAGS_MODE_PARAM in request.args:
         tags_mode_got = _put_to_str(request.args[TAGS_MODE_PARAM])
@@ -258,7 +275,7 @@ def mediasearch_post(entry, provider, archive, action):
 
     try:
         search = MediaSearch()
-        rv = search.do_post(media_storage, entry, provider, archive, action, media_info, tags_mode, pass_value, force_value)
+        rv = search.do_post(media_storage, entry, provider, archive, action, media_info, tags_mode, pass_value, force_value, limit_value)
         return rv
     except:
         logging.error('POST request: uncaught exception')

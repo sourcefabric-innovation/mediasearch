@@ -14,15 +14,16 @@ http://localhost:9020/media/provider_name/archive_name/
 returns list of actions
 
 POST:
-http://localhost:9020/media/provider_name/archive_name/?pass=boolean
+http://localhost:9020/media/provider_name/archive_name/?pass=boolean&limit=integer
 http://localhost:9020/media/provider_name/archive_name/_drop?pass=boolean&force=boolean
 ... simple addition and removal of an archive
 
-http://localhost:9020/media/provider_name/archive_name/_action?pass=boolean&mode=tag_setting
+http://localhost:9020/media/provider_name/archive_name/_action?pass=boolean&mode=tag_setting&limit=integer
 _action: _insert, _update, _delete
-data: {ref,url,mime,tags} for _insert, {ref,tags} for _update, {ref} for _delete
+data: {ref,feed,url,mime,tags} for _insert, {ref,tags} for _update, {ref} for _delete
 {
     ref ... reference to client-wise media id, unique, mandatory,
+    feed ... for slicing the image sets (usually to high vs. low throughput feeds)
     url ... link to the media file, mandatory for _insert, not used otherwise,
     mime ... mime type, mandatory for _insert, not used otherwise,
     tags ... list of tags, _insert, _update only
@@ -31,15 +32,16 @@ pass: default false
 _insert: whether to overwrite, if ref already exists, otherwise error returned
 _update: whether to ignore non-existent ref, otherwise error returned
 _delete: whether to ignore non-existent ref, otherwise error returned
+limit: the count of images (per feed) to use to similarity comparisons
 
 GET:
 http://localhost:9020/media/provider_name/archive_name/_action?par1=val1&...
 _action: _select, _search
 parN:
 ref ... case for _search, mandatory for _search: listing similar items; several values used as similar to any of them
-ref ... case for _select (ref or class mandatory for _select)
-class ... case for _search: image / video / audio
-class ... case for _select(ref or class mandatory for _select): image / video / audio
+ref ... case for _select (ref or feed mandatory for _select)
+feed ... case for _search: image set slice
+feed ... case for _select(ref or feed mandatory for _select): image set slice
 with ... tags included, several parN means all necessary, use ","-joined values for inclusion if any tag present
 without ... tags excluded, several parN means all excluded, use ","-joined vlaues for exclusion if all tags present
 threshold ... distance limit, 0...1, _search only
