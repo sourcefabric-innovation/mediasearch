@@ -42,6 +42,7 @@ CREATED_FIELD = 'created_on'
 UPDATED_FIELD = 'updated_on'
 RELIKED_FIELD = 'reliked_on'
 FEED_FIELD = 'feed'
+TAGS_FIELD = 'tags'
 LIMIT_COUNT_FIELD = 'limit_count'
 DEFAULT_LIMIT_COUNT = 1000
 MIN_LIMIT_COUNT = 100
@@ -103,6 +104,7 @@ class HashStorage(object):
         self.collection_set = False
         self.limit_count = DEFAULT_LIMIT_COUNT
         rank = None
+        is_new = False
 
         try:
             collection = self.storage.db[COLLECTION_GENERAL]
@@ -122,6 +124,7 @@ class HashStorage(object):
         if rank is not None:
             self.collection_set = True
         else:
+            is_new = True
             if force:
                 #prepare new rank
                 try:
@@ -143,6 +146,16 @@ class HashStorage(object):
         if self.collection_set:
             self.collection_rank = rank
             self.collection_name = COLLECTION_PARTICULAR.format(rank=str(rank))
+
+            if is_new:
+                try:
+                    db_collection = self.storage.db[self.collection_name]
+                    for one_field in [CREATED_FIELD, UPDATED_FIELD, RELIKED_FIELD]:
+                        db_collection.ensureIndex({one_field: -1})
+                    for one_field in [FEED_FIELD, TAGS_FIELD]:
+                        db_collection.ensureIndex({one_field: 1})
+                except:
+                    return False
 
         return True
 
@@ -640,7 +653,7 @@ class HashStorage(object):
 
         try:
             collection = self.storage.db[self.collection_name]
-            self.loaded_hashes = collection.find(load_spec).limit(limit_spec)
+            self.loaded_hashes = collection.find(load_spec).sort([(CREATED_FIELD,-1)]).limit(limit_spec)
         except:
             self.correct = False
             self.loaded_hashes = None
