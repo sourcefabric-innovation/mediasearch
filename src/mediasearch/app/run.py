@@ -3,8 +3,12 @@
 # Mediasearch
 #
 
+MONGODB_SERVER_HOST = 'localhost'
+MONGODB_SERVER_PORT = 27017
+
 import os, sys, datetime, json, logging
 import atexit
+from collections import namedtuple
 try:
     from flask import Flask
     from flask import request, Blueprint
@@ -12,9 +16,9 @@ except:
     logging.error('Flask framework is not installed')
     os._exit(1)
 try:
-    from flask.ext.pymongo import PyMongo
+    from pymongo import MongoClient
 except:
-    logging.error('Mongo support is not installed')
+    logging.error('MongoDB support is not installed')
     os._exit(1)
 from mediasearch.utils.dbs import mongo_dbs
 from mediasearch.utils.sync import synchronizer, sync_clean
@@ -24,8 +28,8 @@ app = Flask(__name__)
 
 def setup_mediasearch(dbname, lockfile):
     mongo_dbs.set_dbname(dbname)
-    app.config['MONGO_MEDIASEARCH_DBNAME'] = mongo_dbs.get_dbname()
-    mongo_dbs.set_db(PyMongo(app, config_prefix='MONGO_MEDIASEARCH'))
+    DbHolder = namedtuple('DbHolder', 'db')
+    mongo_dbs.set_db(DbHolder(db=MongoClient(MONGODB_SERVER_HOST, MONGODB_SERVER_PORT)[mongo_dbs.get_dbname()]))
 
     synchronizer.prepare(lockfile)
     atexit.register(sync_clean)

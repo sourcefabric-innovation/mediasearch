@@ -4,5 +4,6 @@ mediasearch/
 mediasearch/algs/
 mediasearch/app/
 mediasearch/plugin/
+mediasearch/utils/
 mediasearch/__init__.py
 
